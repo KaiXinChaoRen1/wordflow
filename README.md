@@ -1,47 +1,45 @@
 # Wordflow
 
-Wordflow is a terminal-first English spelling trainer built with Python and Textual.
+`Wordflow` 是一个用 `Python + Textual` 写的终端英语拼写练习器。
 
-It looks like a dense reading tool from a distance, but underneath it is a focused typing workflow for practicing real article sentences one word at a time.
+它的目标不是做一个花里胡哨的背单词软件，而是做一个看起来像工作界面的、能真正让你在终端里持续练习英文拼写的小工具。
 
-If you want to practice spelling in public without opening an obviously playful app, Wordflow is built for exactly that.
+你可以导入自己的英文文章，程序会自动切句，然后按真实句子推进拼写。整个练习过程是“敲字母推进”，不是“输入整词再回车”，节奏更连贯，也更接近日常英文输入。
 
-## Why Wordflow
+如果你想在办公室、图书馆、工位上练英语，又不想一眼看起来像在玩别的软件，这个项目就是为这种场景做的。
 
-- Looks like work: low-saturation terminal UI, compact layout, continuous article view
-- Trains real text: practice with your own English articles instead of isolated word lists
-- Stays in flow: type letters only, spaces are handled for you
-- Gives instant feedback: completed words turn green, current sentence stays in view
-- Fast to launch: built for keyboard-heavy use inside a terminal
+## 这个项目有什么不一样
 
-## How It Works
+- 像在工作：整体界面低饱和、紧凑、克制，远看更像终端工具
+- 练真实文章：不是孤立单词列表，而是你自己的英文内容
+- 输入更顺手：只管敲字母，单词之间的空格自动处理
+- 反馈很直接：拼完的内容会立刻变绿，当前句始终保持可跟踪
+- 启动很快：适合键盘流用户，打开终端就能开始
 
-1. Paste or write an English article
-2. Wordflow splits it into readable sentences
-3. Start a practice session
-4. Type letters for the current word
-5. When a word is fully matched, Wordflow advances automatically
+## 练习方式
 
-During practice:
+1. 录入或粘贴英文文章
+2. Wordflow 自动按句子切分
+3. 进入练习模式
+4. 按当前单词逐字母输入
+5. 当前单词完全匹配后，自动跳到下一个词
 
-- The full article is shown in one scrollable reading window
-- The active sentence is highlighted with a subtle background
-- The current sentence stays near the center as you move forward
-- Completed words are marked in green
-- You never need to manually manage spaces between words
+练习时你会看到：
 
-## Demo Feel
+- 整篇原文在同一个滚动窗口里连续展示
+- 当前正在拼写的句子有低调底色高亮
+- 句子推进时，当前句尽量保持在视口中间附近
+- 已经拼完的单词会变绿
+- 你不需要手动管空格
 
-Wordflow is optimized for a very specific vibe:
+## 适合谁
 
-- focused
-- understated
-- office-safe
-- keyboard-first
+- 想练英语拼写，但不想打开太显眼的软件
+- 想拿自己的英文文章做输入训练
+- 喜欢终端工具、键盘流、小而专注的软件
+- 想要一个“远看像工作，近看真有用”的练习器
 
-It is intentionally not flashy. The UI is supposed to blend in as a serious terminal tool while still being pleasant to use for long sessions.
-
-## Install
+## 安装
 
 ```bash
 cd /Users/lwq/workspace/spelllane
@@ -49,39 +47,39 @@ python3 -m pip install --user .
 wordflow
 ```
 
-If `~/.local/bin` is already in your `PATH`, you can launch it anywhere with:
+如果你的 `~/.local/bin` 已经在 `PATH` 里，也可以直接：
 
 ```bash
 wordflow
 ```
 
-If not, check:
+如果命令没生效，可以先检查：
 
 ```bash
 echo $PATH
 which wordflow
 ```
 
-## Fastest Local Run
+## 本机最快启动方式
 
-For this machine, the shortest launch command is:
+在这台机器上，最顺手的启动命令是：
 
 ```bash
 wf
 ```
 
-That command points directly at the local source tree, so after code changes you can just restart `wf` and immediately see the latest version.
+`wf` 直接指向当前仓库源码，所以我每次改完代码，你只要退出后重新执行一次 `wf`，看到的就是最新效果。
 
-You can also run:
+也可以直接运行：
 
 ```bash
 cd /Users/lwq/workspace/spelllane
 ./run-dev.sh
 ```
 
-## Development Setup
+## 开发模式
 
-If you want the installed `wordflow` command to reflect local source changes too, use editable install:
+如果你想让安装后的 `wordflow` 命令也跟着本地源码实时更新，可以用 editable 模式：
 
 ```bash
 cd /Users/lwq/workspace/spelllane
@@ -89,40 +87,41 @@ python3 -m pip install --user -e .
 wordflow
 ```
 
-## Controls
+## 快捷键
 
-- `ctrl+n`: new article
-- `ctrl+s`: save article
-- `ctrl+r`: start practice
-- `ctrl+d`: delete article
-- `esc`: leave the practice screen
+- `ctrl+n`：新建文章
+- `ctrl+s`：保存文章
+- `ctrl+r`：开始练习
+- `ctrl+d`：删除文章
+- `esc`：退出练习页
 
-## Storage
+## 数据存储
 
-Wordflow stores article data at:
+默认数据位置：
 
 ```bash
 ~/.wordflow/articles.json
 ```
 
-Compatibility behavior:
+兼容逻辑：
 
-- If an older `~/.spelllane/articles.json` exists, Wordflow can still read it
-- If the user home directory is not writable, Wordflow falls back to:
+- 如果检测到旧版 `~/.spelllane/articles.json`，程序仍然可以读取
+- 如果当前环境不允许写用户目录，会回退到：
 
 ```bash
 .wordflow/articles.json
 ```
 
-## Tech
+## 技术栈
 
 - Python
 - Textual
 
-## Why Star This
+## 为什么值得点个 Star
 
-- It is a clean example of a focused Textual app with a strong UI constraint
-- It solves a weirdly real problem: practicing English spelling without opening an obviously distracting app
-- It is small enough to read quickly, but opinionated enough to feel distinct
+- 这是一个非常小，但方向很明确的终端产品
+- 它解决的问题很具体，而且是真实存在的：想练英语，但不想把界面搞得太像娱乐软件
+- 它不是“大而全”，而是把一个场景打磨得足够顺手
+- 如果你喜欢终端应用、效率工具、Typing 训练、Textual 小项目，这个仓库值得收藏
 
-If you like terminal apps, typing tools, or compact Python products with a clear point of view, this repo is worth a star.
+如果这个项目对你有一点启发，或者你也喜欢这种克制、实用、带一点伪装感的终端工具，欢迎点个 Star。
