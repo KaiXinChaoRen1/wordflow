@@ -400,6 +400,7 @@ class WordflowApp(App[None]):
 
     TITLE = "Wordflow"
     SUB_TITLE = "terminal spelling session"
+    ENABLE_COMMAND_PALETTE = False
     COMMAND_PALETTE_BINDING = ""
 
     CSS = """

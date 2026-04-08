@@ -1,19 +1,47 @@
 # Wordflow
 
-`Wordflow` 是一个用 `Python + Textual` 编写的终端拼写训练器。
+Wordflow is a terminal-first English spelling trainer built with Python and Textual.
 
-你可以录入英文文章，程序会自动切分句子，然后按句子逐词训练拼写。训练时会显示整句原文，你需要从左到右输入当前单词；输入正确后，当前词会变绿，随后进入下一个词。整篇文章完成后，程序会输出中文鼓励和颜文字。
+It looks like a dense reading tool from a distance, but underneath it is a focused typing workflow for practicing real article sentences one word at a time.
 
-## 功能
+If you want to practice spelling in public without opening an obviously playful app, Wordflow is built for exactly that.
 
-- 录入文章标题和正文
-- 自动按英文标点和换行切句
-- 文章列表选择和删除
-- 逐句逐词拼写训练
-- 词级高亮反馈
-- 训练完成鼓励语
+## Why Wordflow
 
-## 安装
+- Looks like work: low-saturation terminal UI, compact layout, continuous article view
+- Trains real text: practice with your own English articles instead of isolated word lists
+- Stays in flow: type letters only, spaces are handled for you
+- Gives instant feedback: completed words turn green, current sentence stays in view
+- Fast to launch: built for keyboard-heavy use inside a terminal
+
+## How It Works
+
+1. Paste or write an English article
+2. Wordflow splits it into readable sentences
+3. Start a practice session
+4. Type letters for the current word
+5. When a word is fully matched, Wordflow advances automatically
+
+During practice:
+
+- The full article is shown in one scrollable reading window
+- The active sentence is highlighted with a subtle background
+- The current sentence stays near the center as you move forward
+- Completed words are marked in green
+- You never need to manually manage spaces between words
+
+## Demo Feel
+
+Wordflow is optimized for a very specific vibe:
+
+- focused
+- understated
+- office-safe
+- keyboard-first
+
+It is intentionally not flashy. The UI is supposed to blend in as a serious terminal tool while still being pleasant to use for long sessions.
+
+## Install
 
 ```bash
 cd /Users/lwq/workspace/spelllane
@@ -21,20 +49,39 @@ python3 -m pip install --user .
 wordflow
 ```
 
-如果你已经像 `hn` 一样把 `~/.local/bin` 放进了 `PATH`，安装后就可以在任何目录直接运行 `wordflow`。
+If `~/.local/bin` is already in your `PATH`, you can launch it anywhere with:
 
-如果还没有生效，可以先检查：
+```bash
+wordflow
+```
+
+If not, check:
 
 ```bash
 echo $PATH
 which wordflow
 ```
 
-## 开发模式
+## Fastest Local Run
 
-如果你希望每次改完代码，重新启动终端程序就直接看到最新效果，不要用普通安装的 `wordflow`，因为它运行的是安装到 Python 环境里的副本。
+For this machine, the shortest launch command is:
 
-推荐两种方式：
+```bash
+wf
+```
+
+That command points directly at the local source tree, so after code changes you can just restart `wf` and immediately see the latest version.
+
+You can also run:
+
+```bash
+cd /Users/lwq/workspace/spelllane
+./run-dev.sh
+```
+
+## Development Setup
+
+If you want the installed `wordflow` command to reflect local source changes too, use editable install:
 
 ```bash
 cd /Users/lwq/workspace/spelllane
@@ -42,37 +89,40 @@ python3 -m pip install --user -e .
 wordflow
 ```
 
-或者直接运行仓库里的开发启动脚本，或者你本机上的短命令 `wf`：
+## Controls
+
+- `ctrl+n`: new article
+- `ctrl+s`: save article
+- `ctrl+r`: start practice
+- `ctrl+d`: delete article
+- `esc`: leave the practice screen
+
+## Storage
+
+Wordflow stores article data at:
 
 ```bash
-cd /Users/lwq/workspace/spelllane
-./run-dev.sh
-wf
+~/.wordflow/articles.json
 ```
 
-`./run-dev.sh` 会直接从当前仓库的 `src/` 目录启动，所以你每次改完代码后，只要重新执行一次它，就会看到最新改动。
+Compatibility behavior:
 
-## 使用
+- If an older `~/.spelllane/articles.json` exists, Wordflow can still read it
+- If the user home directory is not writable, Wordflow falls back to:
 
-启动后主界面分为左右两栏：
+```bash
+.wordflow/articles.json
+```
 
-- 左边是文章列表
-- 右边可以编辑标题和正文
+## Tech
 
-常见流程：
+- Python
+- Textual
 
-1. 输入标题和英文正文
-2. 点 `Save Article`
-3. 在左侧选择文章
-4. 点 `Start Practice`
-5. 按顺序输入当前句子最左边的单词
+## Why Star This
 
-训练规则：
+- It is a clean example of a focused Textual app with a strong UI constraint
+- It solves a weirdly real problem: practicing English spelling without opening an obviously distracting app
+- It is small enough to read quickly, but opinionated enough to feel distinct
 
-- 默认忽略大小写
-- 不要求输入句中标点
-- 保留 `'` 和 `-` 作为单词的一部分
-
-数据默认保存在用户目录下的 `~/.wordflow/articles.json`。
-如果检测到旧版 `~/.spelllane/articles.json`，程序会自动兼容读取。
-如果当前环境不允许写入用户目录，程序会自动回退到当前工作目录下的 `.wordflow/articles.json`。
+If you like terminal apps, typing tools, or compact Python products with a clear point of view, this repo is worth a star.
