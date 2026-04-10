@@ -80,8 +80,7 @@ class ImportArticlesScreen(Screen[None]):
 
     .settings-path {
         color: #d9e1e7;
-        background: #101214;
-        border: solid #3a3a3a;
+        background: #121416;
         padding: 1;
         margin: 1 0;
     }
@@ -125,8 +124,8 @@ class SettingsScreen(Screen[None]):
     }
 
     #settings-list {
-        border: solid #3a3a3a;
-        background: #111111;
+        border: none;
+        background: #121416;
     }
 
     .settings-title {
@@ -391,8 +390,8 @@ class LibraryScreen(Screen[None]):
     CSS = """
     Screen {
         layout: vertical;
-        background: #111111;
-        color: #d0d0d0;
+        background: #101113;
+        color: #c9cdd1;
     }
 
     #library-root {
@@ -407,15 +406,15 @@ class LibraryScreen(Screen[None]):
 
     #sidebar-card, #editor-card {
         height: 1fr;
-        border: solid #3a3a3a;
-        background: #111111;
+        border: none;
+        background: transparent;
         padding: 1;
     }
 
     #article-list {
         height: 1fr;
-        border: solid #3a3a3a;
-        background: #111111;
+        border: none;
+        background: #111316;
     }
 
     #filter-switch {
@@ -428,16 +427,16 @@ class LibraryScreen(Screen[None]):
 
     .filter-button {
         min-height: 3;
-        border: solid #3a3a3a;
-        background: #111111;
-        color: #8d949a;
+        border: none;
+        background: transparent;
+        color: #767d83;
     }
 
     .filter-button.-active {
-        background: #202020;
-        border: solid #4a5157;
-        color: #d3d8dc;
-        text-style: bold;
+        background: transparent;
+        border: none;
+        color: #cfd4d8;
+        text-style: bold underline;
     }
 
     #editor-card {
@@ -445,36 +444,40 @@ class LibraryScreen(Screen[None]):
     }
 
     #title-wrap {
-        height: auto;
+        height: 1;
         margin-bottom: 1;
     }
 
     #editor-title {
         width: 1fr;
+        height: 1;
+        min-height: 1;
         margin-right: 1;
-        border: solid #3a3a3a;
-        background: #111111;
-        color: #d0d0d0;
+        padding: 0 1;
+        border: none;
+        background: #111316;
+        color: #c9cdd1;
     }
 
     #title-hint {
         width: 30;
-        color: #6f767b;
-        padding-top: 1;
+        height: 1;
+        color: #5f666c;
+        padding-top: 0;
     }
 
     #article-body {
         height: 1fr;
         margin: 0;
-        border: solid #3a3a3a;
-        background: #111111;
-        color: #d0d0d0;
+        border: none;
+        background: #111316;
+        color: #c9cdd1;
     }
 
     #status {
         height: 2;
         margin-top: 1;
-        color: #7d858a;
+        color: #6a7177;
     }
 
     #action-row {
@@ -482,7 +485,7 @@ class LibraryScreen(Screen[None]):
         layout: horizontal;
         height: 1;
         padding: 0 1;
-        background: #111111;
+        background: #101113;
     }
 
     .action-button {
@@ -491,69 +494,69 @@ class LibraryScreen(Screen[None]):
         min-height: 1;
         border: none;
         background: transparent;
-        color: #9aa1a7;
+        color: #848b91;
         margin-right: 1;
         padding: 0 1;
     }
 
     .action-button:hover {
-        color: #c0c6cb;
+        color: #adb3b8;
     }
 
     .action-button:focus {
-        color: #d3d8dc;
+        color: #cfd4d8;
         text-style: bold;
     }
 
     #article-list > ListItem {
         padding: 0 1;
-        color: #c0c0c0;
+        color: #aeb4b9;
     }
 
     #article-list > ListItem.-hovered {
-        background: #111111;
+        background: #14171a;
     }
 
     #article-list > ListItem.-highlight {
-        background: #111111;
-        color: #c0c0c0;
+        background: #14171a;
+        color: #bcc2c7;
     }
 
     #article-list:focus > ListItem.-highlight {
-        background: #111111;
-        color: #c0c0c0;
+        background: #14171a;
+        color: #bcc2c7;
     }
 
     #article-list > ListItem.is-selected {
-        background: #1f4f8a;
-        color: #f2f6fa;
+        background: #23282d;
+        color: #d4d9dd;
     }
 
     #article-list:focus > ListItem.is-selected {
-        background: #1f4f8a;
-        color: #f2f6fa;
+        background: #23282d;
+        color: #d4d9dd;
     }
 
     Header {
         dock: top;
-        background: #111111;
-        color: #a0a0a0;
+        background: #101113;
+        color: #666c72;
     }
 
     Footer {
         dock: bottom;
-        background: #111111;
-        color: #686868;
+        background: #101113;
+        color: #575d62;
     }
 
     Input, TextArea {
-        scrollbar-background: #111111;
-        scrollbar-color: #3b4146;
-        scrollbar-color-hover: #4a5157;
+        scrollbar-background: #111316;
+        scrollbar-color: #30363b;
+        scrollbar-color-hover: #3b4248;
     }
 
     Label {
-        color: #c0c0c0;
+        color: #aeb4b9;
     }
     """
 
@@ -681,16 +684,19 @@ class LibraryScreen(Screen[None]):
     def sync_mode_controls(self) -> None:
         title_input = self.query_one("#editor-title", Input)
         title_hint = self.query_one("#title-hint", Static)
-        body = self.query_one("#article-body", TextArea)
 
         if self.current_mode == "note":
-            body.border_title = "memo"
-            title_hint.update("auto: current time")
-            if not self.selected_article_id and not title_input.value.strip():
+            if self.is_creating_new and not self.selected_article_id:
+                title_hint.update("auto: current time")
+            else:
+                title_hint.update("")
+            if self.is_creating_new and not self.selected_article_id and not title_input.value.strip():
                 title_input.value = self.store.default_note_title()
         else:
-            body.border_title = "doc"
-            title_hint.update("name required")
+            if self.is_creating_new and not self.selected_article_id:
+                title_hint.update("name required")
+            else:
+                title_hint.update("")
 
     def sync_filter_controls(self) -> None:
         article_button = self.query_one("#filter-article", Button)
@@ -886,19 +892,19 @@ class WordflowApp(App[None]):
     CSS = """
     Header {
         dock: top;
-        background: #111111;
-        color: #a0a0a0;
+        background: #101113;
+        color: #666c72;
     }
 
     Footer {
         dock: bottom;
-        background: #111111;
-        color: #686868;
+        background: #101113;
+        color: #575d62;
     }
 
     Screen {
-        background: #111111;
-        color: #d0d0d0;
+        background: #101113;
+        color: #c9cdd1;
     }
 
     #practice-root {
@@ -907,55 +913,55 @@ class WordflowApp(App[None]):
     }
 
     #practice-label {
-        color: #8d949a;
+        color: #72797f;
         margin-bottom: 0;
     }
 
     #practice-title {
-        color: #d3d8dc;
+        color: #cfd4d8;
         text-style: bold;
         margin-bottom: 0;
     }
 
     #practice-progress {
-        color: #747b80;
+        color: #686f75;
         margin-bottom: 0;
     }
 
     #article-view {
         height: 1fr;
         margin: 0;
-        border: solid #3a3a3a;
-        background: #101214;
-        scrollbar-background: #101214;
-        scrollbar-color: #3b4146;
-        scrollbar-color-hover: #4a5157;
+        border: none;
+        background: #111316;
+        scrollbar-background: #111316;
+        scrollbar-color: #30363b;
+        scrollbar-color-hover: #3b4248;
         scrollbar-size-vertical: 1;
     }
 
     .article-sentence {
         padding: 0 1;
         margin: 0;
-        color: #848b91;
-        background: #101214;
+        color: #7c8389;
+        background: #111316;
     }
 
     .article-sentence--active {
-        color: #d3d8dc;
-        background: #1c2126;
+        color: #ccd1d6;
+        background: #171a1d;
         text-style: bold;
     }
 
     #practice-message {
         height: 1;
         margin: 0;
-        color: #7d858a;
+        color: #666d73;
     }
 
     #word-input {
-        border: solid #3a3a3a;
-        background: #101214;
-        color: #c8ced3;
+        border: none;
+        background: #111316;
+        color: #c7ccd1;
         dock: bottom;
     }
     """
