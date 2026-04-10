@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import uuid4
 
-from .parsing import split_sentences
+from .parsing import split_lines, split_sentences
+
+ContentMode = Literal["article", "note"]
 
 
 @dataclass
@@ -17,6 +20,7 @@ class Article:
     article_id: str
     title: str
     body: str
+    mode: ContentMode
     sentences: List[str]
 
 
@@ -53,17 +57,38 @@ class ArticleStore:
         if not self.path.exists():
             return []
 
-        with self.path.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+        try:
+            with self.path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (json.JSONDecodeError, OSError):
+            return []
+
+        if not isinstance(payload, list):
+            return []
 
         articles = []
         for item in payload:
-            sentences = item.get("sentences") or split_sentences(item.get("body", ""))
+            if not isinstance(item, dict):
+                continue
+            mode = self.normalize_mode(str(item.get("mode", "article")))
+            article_id = str(item.get("article_id") or uuid4())
+            title = str(item.get("title", "")).strip()
+            body = str(item.get("body", "")).strip()
+            if mode == "note" and not title:
+                title = self.default_note_title()
+
+            raw_sentences = item.get("sentences")
+            if isinstance(raw_sentences, list):
+                sentences = [str(sentence).strip() for sentence in raw_sentences if str(sentence).strip()]
+            else:
+                sentences = self.build_segments(body, mode)
+
             articles.append(
                 Article(
-                    article_id=item["article_id"],
-                    title=item["title"],
-                    body=item["body"],
+                    article_id=article_id,
+                    title=title,
+                    body=body,
+                    mode=mode,
                     sentences=sentences,
                 )
             )
@@ -75,15 +100,24 @@ class ArticleStore:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
 
     def upsert_article(
-        self, articles: List[Article], title: str, body: str, article_id: Optional[str] = None
+        self,
+        articles: List[Article],
+        title: str,
+        body: str,
+        mode: ContentMode = "article",
+        article_id: Optional[str] = None,
     ) -> List[Article]:
         cleaned_title = title.strip()
         cleaned_body = body.strip()
-        sentences = split_sentences(cleaned_body)
+        normalized_mode = self.normalize_mode(mode)
+        if normalized_mode == "note" and not cleaned_title:
+            cleaned_title = self.default_note_title()
+        sentences = self.build_segments(cleaned_body, normalized_mode)
         article = Article(
             article_id=article_id or str(uuid4()),
             title=cleaned_title,
             body=cleaned_body,
+            mode=normalized_mode,
             sentences=sentences,
         )
 
@@ -105,3 +139,15 @@ class ArticleStore:
         updated = [article for article in articles if article.article_id != article_id]
         self.save_articles(updated)
         return updated
+
+    def build_segments(self, body: str, mode: ContentMode) -> List[str]:
+        normalized_mode = self.normalize_mode(mode)
+        if normalized_mode == "note":
+            return split_lines(body)
+        return split_sentences(body)
+
+    def normalize_mode(self, mode: str) -> ContentMode:
+        return "note" if mode == "note" else "article"
+
+    def default_note_title(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

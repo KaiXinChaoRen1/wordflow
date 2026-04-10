@@ -1,4 +1,4 @@
-"""Parsing helpers for articles, sentences, and words."""
+"""Parsing helpers for articles, notes, sentences, and words."""
 
 from __future__ import annotations
 
@@ -17,6 +17,12 @@ def split_sentences(text: str) -> List[str]:
 
     parts = SENTENCE_BREAK_RE.split(normalized)
     return [part.strip() for part in parts if part.strip()]
+
+
+def split_lines(text: str) -> List[str]:
+    """Split note text into one item per non-empty line."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return [line.strip() for line in normalized.split("\n") if line.strip()]
 
 
 def extract_words(sentence: str) -> List[str]:

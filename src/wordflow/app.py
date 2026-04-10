@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional
+from uuid import uuid4
 
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static, TextArea
+from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static, TextArea
 
 from .parsing import extract_words
-from .storage import Article, ArticleStore
+from .storage import Article, ArticleStore, ContentMode
+
+
+def format_mode_label(mode: ContentMode) -> str:
+    return "memo" if mode == "note" else "doc"
+
+
+def format_segment_label(article: Article) -> str:
+    unit = "line" if article.mode == "note" else "sentence"
+    count = len(article.sentences)
+    suffix = unit if count == 1 else f"{unit}s"
+    return f"{count} {suffix}"
 
 
 class ArticleItem(ListItem):
@@ -21,9 +34,164 @@ class ArticleItem(ListItem):
 
     def __init__(self, article: Article) -> None:
         self.article = article
-        sentence_count = len(article.sentences)
-        summary = f"{sentence_count} sentence" if sentence_count == 1 else f"{sentence_count} sentences"
-        super().__init__(Label(f"$ {article.title}\n  {summary}"))
+        meta = f"{format_mode_label(article.mode)} / {format_segment_label(article)}"
+        super().__init__(Label(f"{article.title}\n{meta}"))
+
+
+@dataclass
+class SettingsEntry:
+    key: str
+    title: str
+    summary: str
+
+
+class SettingsItem(ListItem):
+    """List item carrying settings metadata."""
+
+    def __init__(self, entry: SettingsEntry) -> None:
+        self.entry = entry
+        super().__init__(Label(f"{entry.title}\n{entry.summary}"))
+
+
+class ImportArticlesScreen(Screen[None]):
+    """Explain how to edit the article storage file directly."""
+
+    BINDINGS = [("escape", "app.pop_screen", "Back")]
+    CSS = """
+    Screen {
+        background: #111111;
+    }
+
+    #settings-detail-root {
+        padding: 0 1;
+        height: 1fr;
+    }
+
+    .settings-title {
+        color: #c8ced3;
+        text-style: bold;
+        margin-bottom: 0;
+    }
+
+    .settings-copy {
+        color: #8d949a;
+        margin-bottom: 0;
+    }
+
+    .settings-path {
+        color: #d9e1e7;
+        background: #101214;
+        border: solid #3a3a3a;
+        padding: 1;
+        margin: 1 0;
+    }
+    """
+
+    def __init__(self, store: ArticleStore) -> None:
+        super().__init__()
+        self.store = store
+
+    def compose(self) -> ComposeResult:
+        storage_path = str(self.store.path.expanduser())
+        legacy_path = "~/.spelllane/articles.json"
+        yield Header()
+        with Vertical(id="settings-detail-root"):
+            yield Static("data path", classes="settings-title")
+            yield Static(
+                "edit or replace the file below to update local records.",
+                classes="settings-copy",
+            )
+            yield Static(storage_path, classes="settings-path")
+            yield Static(
+                "expected format: json array using the current schema.",
+                classes="settings-copy",
+            )
+            yield Static(f"legacy path: {legacy_path}", classes="settings-copy")
+        yield Footer()
+
+
+class SettingsScreen(Screen[None]):
+    """Secondary settings menu."""
+
+    BINDINGS = [("escape", "app.pop_screen", "Back")]
+    CSS = """
+    Screen {
+        background: #111111;
+    }
+
+    #settings-root {
+        padding: 0 1;
+        height: 1fr;
+    }
+
+    #settings-list {
+        border: solid #3a3a3a;
+        background: #111111;
+    }
+
+    .settings-title {
+        color: #c8ced3;
+        text-style: bold;
+        margin-bottom: 0;
+    }
+
+    .settings-copy {
+        color: #8d949a;
+        margin-bottom: 1;
+    }
+
+    #settings-list > ListItem {
+        padding: 0 1;
+    }
+
+    #settings-list > ListItem.-hovered {
+        background: #111111;
+    }
+
+    #settings-list > ListItem.-highlight {
+        background: #202020;
+        color: #d3d8dc;
+    }
+
+    #settings-list:focus > ListItem.-highlight {
+        background: #202020;
+        color: #d3d8dc;
+    }
+
+    Label {
+        color: #c0c0c0;
+    }
+    """
+
+    def __init__(self, store: ArticleStore) -> None:
+        super().__init__()
+        self.store = store
+        self.entries = [
+            SettingsEntry(
+                key="import",
+                title="data path",
+                summary="show the live file path and edit instructions.",
+            )
+        ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(id="settings-root"):
+            yield Static("config", classes="settings-title")
+            yield Static("local paths and maintenance entries.", classes="settings-copy")
+            yield ListView(*(SettingsItem(entry) for entry in self.entries), id="settings-list")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#settings-list", ListView).focus()
+
+    @on(ListView.Selected, "#settings-list")
+    def handle_select(self, event: ListView.Selected) -> None:
+        if not isinstance(event.item, SettingsItem):
+            return
+
+        if event.item.entry.key == "import":
+            self.app.push_screen(ImportArticlesScreen(self.store))
 
 
 class PracticeScreen(Screen[None]):
@@ -44,7 +212,8 @@ class PracticeScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="practice-root"):
-            yield Static(f"$ wordflow run {self.article.title}", id="practice-title")
+            yield Static(format_mode_label(self.article.mode), id="practice-label")
+            yield Static(self.article.title, id="practice-title")
             yield Static("", id="practice-progress")
             with VerticalScroll(id="article-view"):
                 for index, sentence in enumerate(self.article.sentences):
@@ -75,8 +244,9 @@ class PracticeScreen(Screen[None]):
             self.refresh_sentence()
             return
 
+        unit = "line" if self.article.mode == "note" else "sentence"
         self.query_one("#practice-progress", Static).update(
-            f"[session] sentence={self.sentence_index + 1}/{len(self.article.sentences)} word={self.word_index + 1}/{len(self.current_words)}"
+            f"[session] {unit}={self.sentence_index + 1}/{len(self.article.sentences)} word={self.word_index + 1}/{len(self.current_words)}"
         )
         self.refresh_article_view()
         self.sync_input_value()
@@ -118,12 +288,12 @@ class PracticeScreen(Screen[None]):
             end = start + len(word)
             search_from = end
             if index < self.word_index:
-                text.stylize("bold green", start, end)
+                text.stylize("bold #2f6a3d", start, end)
             elif index == self.word_index:
                 prefix_length = min(len(self.current_prefix), len(word))
                 if prefix_length:
-                    text.stylize("bold green", start, start + prefix_length)
-                text.stylize("bold yellow", start + prefix_length, end)
+                    text.stylize("bold #2f6a3d", start, start + prefix_length)
+                text.stylize("bold #b87a20", start + prefix_length, end)
 
         return text
 
@@ -152,7 +322,7 @@ class PracticeScreen(Screen[None]):
 
         if not raw_value.startswith(locked_prefix):
             self.sync_input_value()
-            self.query_one("#practice-message", Static).update("[edit] completed words are locked")
+            self.query_one("#practice-message", Static).update("[locked] completed words")
             return
 
         guess = raw_value[len(locked_prefix) :].replace(" ", "")
@@ -166,7 +336,9 @@ class PracticeScreen(Screen[None]):
 
         if not target.casefold().startswith(guess.casefold()):
             self.sync_input_value()
-            self.query_one("#practice-message", Static).update(f"[error] next letter -> {target[len(self.current_prefix)]}")
+            self.query_one("#practice-message", Static).update(
+                f"[hint] next -> {target[len(self.current_prefix)]}"
+            )
             return
 
         self.current_prefix = guess
@@ -186,13 +358,14 @@ class PracticeScreen(Screen[None]):
             self.refresh_sentence()
             return
 
+        unit = "line" if self.article.mode == "note" else "sentence"
         self.query_one("#practice-progress", Static).update(
-            f"[session] sentence={self.sentence_index + 1}/{len(self.article.sentences)} word={self.word_index + 1}/{len(self.current_words)}"
+            f"[session] {unit}={self.sentence_index + 1}/{len(self.article.sentences)} word={self.word_index + 1}/{len(self.current_words)}"
         )
         self.refresh_article_view()
         self.sync_input_value()
         input_widget.cursor_position = len(input_widget.value)
-        self.query_one("#practice-message", Static).update("[ok] word complete")
+        self.query_one("#practice-message", Static).update("[step] word complete")
 
     @on(Input.Submitted, "#word-input")
     def handle_submit(self, event: Input.Submitted) -> None:
@@ -207,65 +380,176 @@ class PracticeScreen(Screen[None]):
             widget.update(sentence)
             widget.remove_class("article-sentence--active")
         self.query_one("#word-input", Input).disabled = True
-        self.query_one("#practice-message", Static).update("[done] 本轮训练结束 | press Esc to return")
+        self.query_one("#practice-message", Static).update("[done] press Esc to return")
 
 
 class LibraryScreen(Screen[None]):
     """Main library management screen."""
 
-    BINDINGS = [
-        ("ctrl+n", "new_article", "New"),
-        ("ctrl+s", "save_article", "Save"),
-        ("ctrl+r", "run_article", "Run"),
-        ("ctrl+d", "delete_article", "Delete"),
-    ]
+    BINDINGS = []
 
     CSS = """
     Screen {
         layout: vertical;
+        background: #111111;
+        color: #d0d0d0;
     }
 
     #library-root {
         height: 1fr;
-    }
-
-    #article-list {
-        width: 34;
-        border: solid #3a3a3a;
-    }
-
-    #editor {
         padding: 0 1;
     }
 
+    #library-sidebar {
+        width: 34;
+        margin-right: 1;
+    }
+
+    #sidebar-card, #editor-card {
+        height: 1fr;
+        border: solid #3a3a3a;
+        background: #111111;
+        padding: 1;
+    }
+
+    #article-list {
+        height: 1fr;
+        border: solid #3a3a3a;
+        background: #111111;
+    }
+
+    #filter-switch {
+        layout: grid;
+        grid-size: 2 1;
+        grid-gutter: 1;
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    .filter-button {
+        min-height: 3;
+        border: solid #3a3a3a;
+        background: #111111;
+        color: #8d949a;
+    }
+
+    .filter-button.-active {
+        background: #202020;
+        border: solid #4a5157;
+        color: #d3d8dc;
+        text-style: bold;
+    }
+
+    #editor-card {
+        padding: 1;
+    }
+
+    #title-wrap {
+        height: auto;
+        margin-bottom: 1;
+    }
+
     #editor-title {
-        margin-bottom: 0;
+        width: 1fr;
+        margin-right: 1;
+        border: solid #3a3a3a;
+        background: #111111;
+        color: #d0d0d0;
+    }
+
+    #title-hint {
+        width: 30;
+        color: #6f767b;
+        padding-top: 1;
     }
 
     #article-body {
         height: 1fr;
         margin: 0;
         border: solid #3a3a3a;
-    }
-
-    #status {
-        height: 2;
-        margin-top: 0;
-        color: #a0a0a0;
-    }
-
-    Input, TextArea {
-        border: solid #3a3a3a;
         background: #111111;
         color: #d0d0d0;
     }
 
-    ListView {
+    #status {
+        height: 2;
+        margin-top: 1;
+        color: #7d858a;
+    }
+
+    #action-row {
+        dock: bottom;
+        layout: horizontal;
+        height: 1;
+        padding: 0 1;
         background: #111111;
     }
 
-    ListItem.--highlight {
-        background: #202020;
+    .action-button {
+        width: auto;
+        height: 1;
+        min-height: 1;
+        border: none;
+        background: transparent;
+        color: #9aa1a7;
+        margin-right: 1;
+        padding: 0 1;
+    }
+
+    .action-button:hover {
+        color: #c0c6cb;
+    }
+
+    .action-button:focus {
+        color: #d3d8dc;
+        text-style: bold;
+    }
+
+    #article-list > ListItem {
+        padding: 0 1;
+        color: #c0c0c0;
+    }
+
+    #article-list > ListItem.-hovered {
+        background: #111111;
+    }
+
+    #article-list > ListItem.-highlight {
+        background: #111111;
+        color: #c0c0c0;
+    }
+
+    #article-list:focus > ListItem.-highlight {
+        background: #111111;
+        color: #c0c0c0;
+    }
+
+    #article-list > ListItem.is-selected {
+        background: #1f4f8a;
+        color: #f2f6fa;
+    }
+
+    #article-list:focus > ListItem.is-selected {
+        background: #1f4f8a;
+        color: #f2f6fa;
+    }
+
+    Header {
+        dock: top;
+        background: #111111;
+        color: #a0a0a0;
+    }
+
+    Footer {
+        dock: bottom;
+        background: #111111;
+        color: #686868;
+    }
+
+    Input, TextArea {
+        scrollbar-background: #111111;
+        scrollbar-color: #3b4146;
+        scrollbar-color-hover: #4a5157;
     }
 
     Label {
@@ -274,107 +558,302 @@ class LibraryScreen(Screen[None]):
     """
 
     selected_article_id: reactive[Optional[str]] = reactive(None)
+    current_mode: reactive[ContentMode] = reactive("article")
+    current_filter: reactive[ContentMode] = reactive("article")
 
     def __init__(self, store: ArticleStore) -> None:
         super().__init__()
         self.store = store
         self.articles: List[Article] = self.store.load_articles()
+        self.is_creating_new = False
+        self.previous_selected_article_id: Optional[str] = None
+        self.previous_filter: ContentMode = "article"
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="library-root"):
-            yield ListView(id="article-list")
-            with Vertical(id="editor"):
-                yield Input(placeholder="$ title", id="editor-title")
+            with Vertical(id="library-sidebar"):
+                with Vertical(id="sidebar-card"):
+                    with Grid(id="filter-switch"):
+                        yield Button("Article", id="filter-article", classes="filter-button")
+                        yield Button("Memo", id="filter-note", classes="filter-button")
+                    yield ListView(id="article-list")
+            with Vertical(id="editor-card"):
+                with Horizontal(id="title-wrap"):
+                    yield Input(placeholder="name", id="editor-title")
+                    yield Static("", id="title-hint")
                 yield TextArea("", id="article-body")
                 yield Static("", id="status")
-        yield Footer()
+        with Horizontal(id="action-row"):
+            yield Button("New A", id="action-new-article", classes="action-button")
+            yield Button("New M", id="action-new-memo", classes="action-button")
+            yield Button("Save", id="action-save", classes="action-button")
+            yield Button("Run", id="action-run", classes="action-button")
+            yield Button("Del", id="action-delete", classes="action-button")
+            yield Button("Config", id="action-settings", classes="action-button")
+            yield Button("Cancel", id="action-cancel-new", classes="action-button")
 
     def on_mount(self) -> None:
         self.refresh_article_list()
+        self.sync_mode_controls()
+        self.sync_filter_controls()
+        self.sync_action_controls()
         self.focus_editor()
 
     def refresh_article_list(self) -> None:
         list_view = self.query_one("#article-list", ListView)
         list_view.clear()
-        for article in self.articles:
-            list_view.append(ArticleItem(article))
+        visible_articles = self.filtered_articles()
+        if visible_articles:
+            list_view.extend([ArticleItem(article) for article in visible_articles])
+        self.call_after_refresh(self.reconcile_article_selection)
 
-        if self.articles:
-            selected_index = 0
-            if self.selected_article_id:
-                for index, article in enumerate(self.articles):
-                    if article.article_id == self.selected_article_id:
-                        selected_index = index
-                        break
-            list_view.index = selected_index
-            self.load_article(self.articles[selected_index])
-        else:
+    def reconcile_article_selection(self) -> None:
+        list_view = self.query_one("#article-list", ListView)
+        visible_articles = self.filtered_articles()
+
+        if not visible_articles:
+            self.selected_article_id = None
+            list_view.index = None
             self.clear_editor()
+            return
+
+        if not self.selected_article_id:
+            list_view.index = None
+            self.sync_article_list_selected_class()
+            if not self.is_creating_new:
+                self.clear_editor()
+            return
+
+        selected_index: Optional[int] = None
+        for index, article in enumerate(visible_articles):
+            if article.article_id == self.selected_article_id:
+                selected_index = index
+                break
+
+        if selected_index is None:
+            self.selected_article_id = None
+            list_view.index = None
+            self.clear_editor()
+            return
+
+        list_view.index = selected_index
+        self.load_article(visible_articles[selected_index])
 
     def load_article(self, article: Article) -> None:
+        self.is_creating_new = False
         self.selected_article_id = article.article_id
+        self.current_mode = article.mode
         self.query_one("#editor-title", Input).value = article.title
         self.query_one("#article-body", TextArea).text = article.body
+        self.sync_article_list_selected_class()
+        self.sync_mode_controls()
+        self.sync_action_controls()
         self.query_one("#status", Static).update(
-            f"[loaded] {article.title} | sentences={len(article.sentences)}"
+            f"[ready] {article.title} | {format_mode_label(article.mode)} | {format_segment_label(article)}"
         )
 
     def clear_editor(self) -> None:
         self.selected_article_id = None
         self.query_one("#editor-title", Input).value = ""
         self.query_one("#article-body", TextArea).text = ""
+        self.sync_article_list_selected_class()
+        self.sync_mode_controls()
+        self.sync_action_controls()
         self.query_one("#status", Static).update(
-            "[idle] create or select an article | ctrl+s save | ctrl+r run"
+            "[idle] select or create an item"
         )
+
+    def sync_article_list_selected_class(self) -> None:
+        list_view = self.query_one("#article-list", ListView)
+        selected_id = self.selected_article_id
+        for item in list_view.query("ListItem"):
+            if not isinstance(item, ArticleItem):
+                continue
+            if selected_id and item.article.article_id == selected_id:
+                item.add_class("is-selected")
+            else:
+                item.remove_class("is-selected")
 
     def focus_editor(self) -> None:
         self.query_one("#editor-title", Input).focus()
 
+    def sync_mode_controls(self) -> None:
+        title_input = self.query_one("#editor-title", Input)
+        title_hint = self.query_one("#title-hint", Static)
+        body = self.query_one("#article-body", TextArea)
+
+        if self.current_mode == "note":
+            body.border_title = "memo"
+            title_hint.update("auto: current time")
+            if not self.selected_article_id and not title_input.value.strip():
+                title_input.value = self.store.default_note_title()
+        else:
+            body.border_title = "doc"
+            title_hint.update("name required")
+
+    def sync_filter_controls(self) -> None:
+        article_button = self.query_one("#filter-article", Button)
+        note_button = self.query_one("#filter-note", Button)
+
+        for button, active in (
+            (article_button, self.current_filter == "article"),
+            (note_button, self.current_filter == "note"),
+        ):
+            if active:
+                button.add_class("-active")
+            else:
+                button.remove_class("-active")
+
+    def sync_action_controls(self) -> None:
+        save_button = self.query_one("#action-save", Button)
+        cancel_button = self.query_one("#action-cancel-new", Button)
+        save_button.display = self.is_creating_new
+        cancel_button.display = self.is_creating_new
+
+    def filtered_articles(self) -> List[Article]:
+        return [article for article in self.articles if article.mode == self.current_filter]
+
+    def set_filter(self, mode: ContentMode) -> None:
+        self.is_creating_new = False
+        self.current_filter = mode
+        self.current_mode = mode
+        self.selected_article_id = None
+        self.sync_filter_controls()
+        self.sync_action_controls()
+        self.refresh_article_list()
+
+    def start_new_item(self, mode: ContentMode) -> None:
+        self.is_creating_new = True
+        self.previous_selected_article_id = self.selected_article_id
+        self.previous_filter = self.current_filter
+        self.current_mode = mode
+        self.current_filter = mode
+        self.selected_article_id = None
+        self.sync_filter_controls()
+        self.sync_action_controls()
+        self.clear_editor()
+        self.refresh_article_list()
+        if mode == "note":
+            self.query_one("#editor-title", Input).value = self.store.default_note_title()
+        self.sync_mode_controls()
+
     @on(ListView.Selected, "#article-list")
     def handle_select(self, event: ListView.Selected) -> None:
-        if isinstance(event.item, ArticleItem):
-            self.load_article(event.item.article)
+        self.load_article_from_item(event.item)
+
+    def load_article_from_item(self, item: Optional[ListItem]) -> None:
+        if not isinstance(item, ArticleItem):
+            return
+        if not self.is_creating_new and self.selected_article_id == item.article.article_id:
+            return
+        self.load_article(item.article)
+
+    @on(Button.Pressed, "#filter-article")
+    def handle_filter_article_pressed(self) -> None:
+        self.set_filter("article")
+
+    @on(Button.Pressed, "#filter-note")
+    def handle_filter_note_pressed(self) -> None:
+        self.set_filter("note")
+
+    @on(Button.Pressed, "#action-new-article")
+    def handle_action_new_article_pressed(self) -> None:
+        self.handle_new()
+
+    @on(Button.Pressed, "#action-new-memo")
+    def handle_action_new_memo_pressed(self) -> None:
+        self.start_new_item("note")
+        self.focus_editor()
+
+    @on(Button.Pressed, "#action-save")
+    def handle_action_save_pressed(self) -> None:
+        self.handle_save()
+
+    @on(Button.Pressed, "#action-run")
+    def handle_action_run_pressed(self) -> None:
+        self.handle_start()
+
+    @on(Button.Pressed, "#action-delete")
+    def handle_action_delete_pressed(self) -> None:
+        self.handle_delete()
+
+    @on(Button.Pressed, "#action-settings")
+    def handle_action_settings_pressed(self) -> None:
+        self.action_open_settings()
+
+    @on(Button.Pressed, "#action-cancel-new")
+    def handle_action_cancel_new_pressed(self) -> None:
+        self.action_cancel_new()
 
     def handle_new(self) -> None:
-        self.clear_editor()
+        self.start_new_item("article")
         self.focus_editor()
 
     def action_new_article(self) -> None:
         self.handle_new()
 
+    def action_new_memo(self) -> None:
+        self.start_new_item("note")
+        self.focus_editor()
+
+    def action_cancel_new(self) -> None:
+        if not self.is_creating_new:
+            return
+
+        self.is_creating_new = False
+        self.current_filter = self.previous_filter
+        self.current_mode = self.previous_filter
+        self.selected_article_id = self.previous_selected_article_id
+        self.sync_filter_controls()
+        self.sync_action_controls()
+        self.refresh_article_list()
+
+    def action_open_settings(self) -> None:
+        self.app.push_screen(SettingsScreen(self.store))
+
     def handle_save(self) -> None:
         title = self.query_one("#editor-title", Input).value.strip()
         body = self.query_one("#article-body", TextArea).text.strip()
 
-        if not title or not body:
-            self.query_one("#status", Static).update("[error] title and body are required")
+        if not body:
+            self.query_one("#status", Static).update("[missing] body")
             return
 
+        if self.current_mode == "article" and not title:
+            self.query_one("#status", Static).update("[missing] name for doc")
+            return
+
+        target_article_id = self.selected_article_id or str(uuid4())
         updated_articles = self.store.upsert_article(
             self.articles,
             title=title,
             body=body,
-            article_id=self.selected_article_id,
+            mode=self.current_mode,
+            article_id=target_article_id,
         )
         self.articles = updated_articles
-        matching = next((article for article in self.articles if article.title == title and article.body == body), None)
-        self.selected_article_id = matching.article_id if matching else self.selected_article_id
+        self.is_creating_new = False
+        self.selected_article_id = target_article_id
+        saved_article = next((article for article in self.articles if article.article_id == target_article_id), None)
+        if saved_article is not None:
+            self.current_mode = saved_article.mode
+            self.query_one("#editor-title", Input).value = saved_article.title
         self.refresh_article_list()
-        self.query_one("#status", Static).update("[ok] article saved | ctrl+r run")
+        self.query_one("#status", Static).update(f"[saved] {format_mode_label(self.current_mode)}")
 
     def action_save_article(self) -> None:
         self.handle_save()
 
     def handle_delete(self) -> None:
         if not self.selected_article_id:
-            self.query_one("#status", Static).update("[error] select an article to delete")
+            self.query_one("#status", Static).update("[missing] select an item")
             return
 
         self.articles = self.store.delete_article(self.articles, self.selected_article_id)
         self.selected_article_id = None
         self.refresh_article_list()
-        self.query_one("#status", Static).update("[ok] article deleted")
+        self.query_one("#status", Static).update("[removed] item")
 
     def action_delete_article(self) -> None:
         self.handle_delete()
@@ -382,11 +861,12 @@ class LibraryScreen(Screen[None]):
     def handle_start(self) -> None:
         article = next((item for item in self.articles if item.article_id == self.selected_article_id), None)
         if article is None:
-            self.query_one("#status", Static).update("[error] select an article first")
+            self.query_one("#status", Static).update("[missing] select an item")
             return
 
         if not article.sentences:
-            self.query_one("#status", Static).update("[error] article has no valid sentences")
+            unit = "lines" if article.mode == "note" else "sentences"
+            self.query_one("#status", Static).update(f"[invalid] {format_mode_label(article.mode)} has no {unit}")
             return
 
         self.app.push_screen(PracticeScreen(article))
@@ -398,8 +878,8 @@ class LibraryScreen(Screen[None]):
 class WordflowApp(App[None]):
     """Main application."""
 
-    TITLE = "Wordflow"
-    SUB_TITLE = "terminal spelling session"
+    TITLE = "Indexer"
+    SUB_TITLE = "local records"
     ENABLE_COMMAND_PALETTE = False
     COMMAND_PALETTE_BINDING = ""
 
@@ -416,13 +896,24 @@ class WordflowApp(App[None]):
         color: #686868;
     }
 
+    Screen {
+        background: #111111;
+        color: #d0d0d0;
+    }
+
     #practice-root {
         padding: 0 1;
         height: 1fr;
     }
 
-    #practice-title {
+    #practice-label {
         color: #8d949a;
+        margin-bottom: 0;
+    }
+
+    #practice-title {
+        color: #d3d8dc;
+        text-style: bold;
         margin-bottom: 0;
     }
 
