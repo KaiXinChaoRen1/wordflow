@@ -80,7 +80,11 @@ class ArticleStore:
 
             raw_sentences = item.get("sentences")
             if isinstance(raw_sentences, list):
-                sentences = [str(sentence).strip() for sentence in raw_sentences if str(sentence).strip()]
+                sentences = [
+                    str(sentence).strip()
+                    for sentence in raw_sentences
+                    if str(sentence).strip()
+                ]
             else:
                 sentences = self.build_segments(body, mode)
 
@@ -158,6 +162,18 @@ class ArticleStore:
         updated = [article for article in articles if article.article_id != article_id]
         self.save_articles(updated)
         return updated
+
+    def complete_article(self, article_id: str) -> Optional[Article]:
+        articles = self.load_articles()
+        completed = None
+        for article in articles:
+            if article.article_id == article_id:
+                article.completed_count = min(3, article.completed_count + 1)
+                completed = article
+                break
+        if completed is not None:
+            self.save_articles(articles)
+        return completed
 
     def build_segments(self, body: str, mode: ContentMode) -> List[str]:
         normalized_mode = self.normalize_mode(mode)

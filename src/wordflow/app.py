@@ -2,31 +2,30 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional
 from uuid import uuid4
 
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
-from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Click
 from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static, TextArea
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Static,
+    TextArea,
+)
 
 from .parsing import extract_words
 from .storage import Article, ArticleStore, ContentMode
-
-
-def format_mode_label(mode: ContentMode) -> str:
-    return "memo" if mode == "note" else "doc"
-
-
-def format_segment_label(article: Article) -> str:
-    unit = "line" if article.mode == "note" else "sentence"
-    count = len(article.sentences)
-    suffix = unit if count == 1 else f"{unit}s"
-    return f"{count} {suffix}"
 
 
 class ArticleItem(ListItem):
@@ -34,28 +33,11 @@ class ArticleItem(ListItem):
 
     def __init__(self, article: Article) -> None:
         self.article = article
-        mode_label = format_mode_label(article.mode)
         gold_star = "[gold1]★[/gold1]"
         gray_star = "[dim]☆[/dim]"
         stars = gold_star * article.completed_count + gray_star * (3 - article.completed_count)
-        meta = f"{mode_label} {stars}"
-        from rich.text import Text
-        super().__init__(Label(Text.from_markup(f"{article.title}\n[dim]{meta}[/dim]")))
-
-
-@dataclass
-class SettingsEntry:
-    key: str
-    title: str
-    summary: str
-
-
-class SettingsItem(ListItem):
-    """List item carrying settings metadata."""
-
-    def __init__(self, entry: SettingsEntry) -> None:
-        self.entry = entry
-        super().__init__(Label(f"{entry.title}\n{entry.summary}"))
+        title = article.title or "(untitled)"
+        super().__init__(Label(Text.from_markup(f"{title}\n{stars}")))
 
 
 class ImportArticlesScreen(Screen[None]):
@@ -114,90 +96,6 @@ class ImportArticlesScreen(Screen[None]):
         yield Footer()
 
 
-class SettingsScreen(Screen[None]):
-    """Secondary settings menu."""
-
-    BINDINGS = [("escape", "app.pop_screen", "Back")]
-    CSS = """
-    Screen {
-        background: #111111;
-    }
-
-    #settings-root {
-        padding: 0 1;
-        height: 1fr;
-    }
-
-    #settings-list {
-        border: none;
-        background: #121416;
-    }
-
-    .settings-title {
-        color: #c8ced3;
-        text-style: bold;
-        margin-bottom: 0;
-    }
-
-    .settings-copy {
-        color: #8d949a;
-        margin-bottom: 1;
-    }
-
-    #settings-list > ListItem {
-        padding: 0 1;
-    }
-
-    #settings-list > ListItem.-hovered {
-        background: #111111;
-    }
-
-    #settings-list > ListItem.-highlight {
-        background: #202020;
-        color: #d3d8dc;
-    }
-
-    #settings-list:focus > ListItem.-highlight {
-        background: #202020;
-        color: #d3d8dc;
-    }
-
-    Label {
-        color: #c0c0c0;
-    }
-    """
-
-    def __init__(self, store: ArticleStore) -> None:
-        super().__init__()
-        self.store = store
-        self.entries = [
-            SettingsEntry(
-                key="import",
-                title="data path",
-                summary="show the live file path and edit instructions.",
-            )
-        ]
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Vertical(id="settings-root"):
-            yield Static("config", classes="settings-title")
-            yield Static("local paths and maintenance entries.", classes="settings-copy")
-            yield ListView(*(SettingsItem(entry) for entry in self.entries), id="settings-list")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        self.query_one("#settings-list", ListView).focus()
-
-    @on(ListView.Selected, "#settings-list")
-    def handle_select(self, event: ListView.Selected) -> None:
-        if not isinstance(event.item, SettingsItem):
-            return
-
-        if event.item.entry.key == "import":
-            self.app.push_screen(ImportArticlesScreen(self.store))
-
-
 class PracticeScreen(Screen[None]):
     """Practice a single article sentence by sentence."""
 
@@ -206,25 +104,36 @@ class PracticeScreen(Screen[None]):
     sentence_index = reactive(0)
     word_index = reactive(0)
 
-    def __init__(self, article: Article, store: ArticleStore) -> None:
+    def __init__(
+        self,
+        article: Article,
+        store: ArticleStore,
+        on_completed: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__()
         self.article = article
         self.store = store
-        self.current_words = extract_words(self.article.sentences[0]) if self.article.sentences else []
+        self.on_completed = on_completed
+        self.current_words = (
+            extract_words(self.article.sentences[0]) if self.article.sentences else []
+        )
         self.current_prefix = ""
         self.syncing_input = False
+        self.is_complete = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="practice-root"):
-            yield Static(format_mode_label(self.article.mode), id="practice-label")
             yield Static(self.article.title, id="practice-title")
-            yield Static("", id="practice-progress")
             with VerticalScroll(id="article-view"):
                 for index, sentence in enumerate(self.article.sentences):
-                    yield Static(sentence, id=self.sentence_widget_id(index), classes="article-sentence")
+                    yield Static(
+                        sentence,
+                        id=self.sentence_widget_id(index),
+                        classes="article-sentence",
+                    )
             yield Static("", id="practice-message")
-            yield Input(placeholder="type letters only, spaces are automatic", id="word-input")
+            yield Input(placeholder="type", id="word-input")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -249,10 +158,6 @@ class PracticeScreen(Screen[None]):
             self.refresh_sentence()
             return
 
-        unit = "line" if self.article.mode == "note" else "sentence"
-        self.query_one("#practice-progress", Static).update(
-            f"[session] {unit}={self.sentence_index + 1}/{len(self.article.sentences)} word={self.word_index + 1}/{len(self.current_words)}"
-        )
         self.refresh_article_view()
         self.sync_input_value()
         self.query_one("#practice-message", Static).update("")
@@ -317,7 +222,7 @@ class PracticeScreen(Screen[None]):
 
     @on(Input.Changed, "#word-input")
     def handle_input_changed(self, event: Input.Changed) -> None:
-        if self.syncing_input or not self.current_words:
+        if self.is_complete or self.syncing_input or not self.current_words:
             return
 
         input_widget = self.query_one("#word-input", Input)
@@ -363,10 +268,6 @@ class PracticeScreen(Screen[None]):
             self.refresh_sentence()
             return
 
-        unit = "line" if self.article.mode == "note" else "sentence"
-        self.query_one("#practice-progress", Static).update(
-            f"[session] {unit}={self.sentence_index + 1}/{len(self.article.sentences)} word={self.word_index + 1}/{len(self.current_words)}"
-        )
         self.refresh_article_view()
         self.sync_input_value()
         input_widget.cursor_position = len(input_widget.value)
@@ -378,27 +279,32 @@ class PracticeScreen(Screen[None]):
         input_widget = self.query_one("#word-input", Input)
         input_widget.cursor_position = len(input_widget.value)
 
+    def on_key(self, event) -> None:
+        if self.is_complete:
+            event.stop()
+            self.app.pop_screen()
+
     def finish_article(self) -> None:
-        self.query_one("#practice-progress", Static).update("[session] complete")
+        if self.is_complete:
+            return
+
+        self.is_complete = True
         for index, sentence in enumerate(self.article.sentences):
             widget = self.query_one(f"#{self.sentence_widget_id(index)}", Static)
             widget.update(sentence)
             widget.remove_class("article-sentence--active")
-        self.query_one("#word-input", Input).disabled = True
-        self.query_one("#practice-message", Static).update("[done] press Esc to return")
+        input_widget = self.query_one("#word-input", Input)
+        input_widget.value = ""
+        input_widget.disabled = True
+        self.query_one("#practice-message", Static).update(
+            "[bold #6fbf73]Good[/bold #6fbf73]  press any key"
+        )
 
-        # Update completion count (max 3)
-        if self.article.completed_count < 3:
-            self.article.completed_count += 1
-            # Save the updated article
-            articles = self.store.load_articles()
-            updated_articles = []
-            for art in articles:
-                if art.article_id == self.article.article_id:
-                    updated_articles.append(self.article)
-                else:
-                    updated_articles.append(art)
-            self.store.save_articles(updated_articles)
+        completed_article = self.store.complete_article(self.article.article_id)
+        if completed_article is not None:
+            self.article.completed_count = completed_article.completed_count
+            if self.on_completed is not None:
+                self.on_completed()
 
 
 class LibraryScreen(Screen[None]):
@@ -434,54 +340,46 @@ class LibraryScreen(Screen[None]):
         height: 1fr;
         border: none;
         background: #111316;
+        color: #aeb4b9;
     }
 
     #filter-switch {
-        layout: grid;
-        grid-size: 2 1;
-        grid-gutter: 1;
-        height: 3;
+        height: 1;
         margin-bottom: 1;
+        background: #111316;
+    }
+
+    #filter-label {
+        width: 6;
+        height: 1;
+        color: #5f666c;
     }
 
     .filter-button {
-        min-height: 3;
-        border: none;
-        background: transparent;
+        width: 11;
+        height: 1;
+        min-height: 1;
+        background: #111316;
         color: #767d83;
+        margin-right: 1;
+        padding: 0 1;
         text-style: none;
     }
 
     .filter-button.-active {
-        border: none;
-        background: transparent;
-        color: #cfd4d8;
-        text-style: bold underline;
+        background: #26312b;
+        color: #d4d9dd;
+        text-style: bold;
     }
 
     .filter-button:hover {
-        border: none;
-        background: transparent;
-        color: #8d949a;
+        background: #1a1d20;
+        color: #c0c6cb;
     }
 
     .filter-button:focus {
-        border: none;
-        background: transparent;
-        outline: none;
-    }
-
-    #filter-switch Button {
-        border: none;
-    }
-
-    #filter-switch Button:focus {
-        border: none;
-        outline: none;
-    }
-
-    #filter-switch Button.-active {
-        border: none;
+        background: #1a1d20;
+        color: #cfd4d8;
         outline: none;
     }
 
@@ -489,27 +387,15 @@ class LibraryScreen(Screen[None]):
         padding: 1;
     }
 
-    #title-wrap {
-        height: 1;
-        margin-bottom: 1;
-    }
-
     #editor-title {
         width: 1fr;
         height: 1;
         min-height: 1;
-        margin-right: 1;
         padding: 0 1;
         border: none;
         background: #111316;
         color: #c9cdd1;
-    }
-
-    #title-hint {
-        width: 30;
-        height: 1;
-        color: #5f666c;
-        padding-top: 0;
+        margin-bottom: 1;
     }
 
     #article-body {
@@ -556,31 +442,26 @@ class LibraryScreen(Screen[None]):
 
     #article-list > ListItem {
         padding: 0 1;
+        background: transparent;
+    }
+
+    #article-list > ListItem Label {
+        background: transparent;
         color: #aeb4b9;
     }
 
-    #article-list > ListItem.-hovered {
-        background: #14171a;
-    }
-
-    #article-list > ListItem.-highlight {
-        background: #14171a;
-        color: #bcc2c7;
-    }
-
-    #article-list:focus > ListItem.-highlight {
-        background: #14171a;
-        color: #bcc2c7;
-    }
-
-    #article-list > ListItem.is-selected {
-        background: #23282d;
-        color: #d4d9dd;
-    }
-
+    #article-list > ListItem.-hovered,
+    #article-list > ListItem.-highlight,
+    #article-list:focus > ListItem.-highlight,
+    #article-list > ListItem.is-selected,
     #article-list:focus > ListItem.is-selected {
-        background: #23282d;
+        background: transparent;
+    }
+
+    #article-list > ListItem.is-selected,
+    #article-list > ListItem.is-selected Label {
         color: #d4d9dd;
+        text-style: bold;
     }
 
     Header {
@@ -623,14 +504,23 @@ class LibraryScreen(Screen[None]):
         with Horizontal(id="library-root"):
             with Vertical(id="library-sidebar"):
                 with Vertical(id="sidebar-card"):
-                    with Grid(id="filter-switch"):
-                        yield Button("Article", id="filter-article", classes="filter-button")
-                        yield Button("Memo", id="filter-note", classes="filter-button")
+                    with Horizontal(id="filter-switch"):
+                        yield Static("mode", id="filter-label")
+                        yield Static(
+                            "article",
+                            id="filter-article",
+                            classes="filter-button",
+                            markup=False,
+                        )
+                        yield Static(
+                            "memo",
+                            id="filter-note",
+                            classes="filter-button",
+                            markup=False,
+                        )
                     yield ListView(id="article-list")
             with Vertical(id="editor-card"):
-                with Horizontal(id="title-wrap"):
-                    yield Input(placeholder="name", id="editor-title")
-                    yield Static("", id="title-hint")
+                yield Input(placeholder="name", id="editor-title")
                 yield TextArea("", id="article-body")
                 yield Static("", id="status")
         with Horizontal(id="action-row"):
@@ -644,7 +534,6 @@ class LibraryScreen(Screen[None]):
 
     def on_mount(self) -> None:
         self.refresh_article_list()
-        self.sync_mode_controls()
         self.sync_filter_controls()
         self.sync_action_controls()
         self.focus_editor()
@@ -696,22 +585,18 @@ class LibraryScreen(Screen[None]):
         self.query_one("#editor-title", Input).value = article.title
         self.query_one("#article-body", TextArea).text = article.body
         self.sync_article_list_selected_class()
-        self.sync_mode_controls()
         self.sync_action_controls()
-        self.query_one("#status", Static).update(
-            f"[ready] {article.title} | {format_mode_label(article.mode)} | {format_segment_label(article)}"
-        )
+        self.query_one("#status", Static).update(f"[ready] {article.title}")
 
     def clear_editor(self) -> None:
         self.selected_article_id = None
+        if not self.is_creating_new:
+            self.current_mode = self.current_filter
         self.query_one("#editor-title", Input).value = ""
         self.query_one("#article-body", TextArea).text = ""
         self.sync_article_list_selected_class()
-        self.sync_mode_controls()
         self.sync_action_controls()
-        self.query_one("#status", Static).update(
-            "[idle] select or create an item"
-        )
+        self.query_one("#status", Static).update("[idle] select or create")
 
     def sync_article_list_selected_class(self) -> None:
         list_view = self.query_one("#article-list", ListView)
@@ -727,31 +612,16 @@ class LibraryScreen(Screen[None]):
     def focus_editor(self) -> None:
         self.query_one("#editor-title", Input).focus()
 
-    def sync_mode_controls(self) -> None:
-        title_input = self.query_one("#editor-title", Input)
-        title_hint = self.query_one("#title-hint", Static)
-
-        if self.current_mode == "note":
-            if self.is_creating_new and not self.selected_article_id:
-                title_hint.update("auto: current time")
-            else:
-                title_hint.update("")
-            if self.is_creating_new and not self.selected_article_id and not title_input.value.strip():
-                title_input.value = self.store.default_note_title()
-        else:
-            if self.is_creating_new and not self.selected_article_id:
-                title_hint.update("name required")
-            else:
-                title_hint.update("")
-
     def sync_filter_controls(self) -> None:
-        article_button = self.query_one("#filter-article", Button)
-        note_button = self.query_one("#filter-note", Button)
+        article_button = self.query_one("#filter-article", Static)
+        note_button = self.query_one("#filter-note", Static)
 
         for button, active in (
             (article_button, self.current_filter == "article"),
             (note_button, self.current_filter == "note"),
         ):
+            label = "article" if button.id == "filter-article" else "memo"
+            button.update(f"> {label}" if active else f"  {label}")
             if active:
                 button.add_class("-active")
             else:
@@ -782,13 +652,15 @@ class LibraryScreen(Screen[None]):
         self.current_mode = mode
         self.current_filter = mode
         self.selected_article_id = None
+        self.query_one("#editor-title", Input).value = (
+            self.store.default_note_title() if mode == "note" else ""
+        )
+        self.query_one("#article-body", TextArea).text = ""
+        self.query_one("#status", Static).update("[new] edit then save")
         self.sync_filter_controls()
         self.sync_action_controls()
-        self.clear_editor()
         self.refresh_article_list()
-        if mode == "note":
-            self.query_one("#editor-title", Input).value = self.store.default_note_title()
-        self.sync_mode_controls()
+        self.focus_editor()
 
     @on(ListView.Selected, "#article-list")
     def handle_select(self, event: ListView.Selected) -> None:
@@ -801,12 +673,14 @@ class LibraryScreen(Screen[None]):
             return
         self.load_article(item.article)
 
-    @on(Button.Pressed, "#filter-article")
-    def handle_filter_article_pressed(self) -> None:
+    @on(Click, "#filter-article")
+    def handle_filter_article_pressed(self, event: Click) -> None:
+        event.stop()
         self.set_filter("article")
 
-    @on(Button.Pressed, "#filter-note")
-    def handle_filter_note_pressed(self) -> None:
+    @on(Click, "#filter-note")
+    def handle_filter_note_pressed(self, event: Click) -> None:
+        event.stop()
         self.set_filter("note")
 
     @on(Button.Pressed, "#action-new-article")
@@ -816,7 +690,6 @@ class LibraryScreen(Screen[None]):
     @on(Button.Pressed, "#action-new-memo")
     def handle_action_new_memo_pressed(self) -> None:
         self.start_new_item("note")
-        self.focus_editor()
 
     @on(Button.Pressed, "#action-save")
     def handle_action_save_pressed(self) -> None:
@@ -832,24 +705,16 @@ class LibraryScreen(Screen[None]):
 
     @on(Button.Pressed, "#action-settings")
     def handle_action_settings_pressed(self) -> None:
-        self.action_open_settings()
+        self.open_settings()
 
     @on(Button.Pressed, "#action-cancel-new")
     def handle_action_cancel_new_pressed(self) -> None:
-        self.action_cancel_new()
+        self.cancel_new()
 
     def handle_new(self) -> None:
         self.start_new_item("article")
-        self.focus_editor()
 
-    def action_new_article(self) -> None:
-        self.handle_new()
-
-    def action_new_memo(self) -> None:
-        self.start_new_item("note")
-        self.focus_editor()
-
-    def action_cancel_new(self) -> None:
+    def cancel_new(self) -> None:
         if not self.is_creating_new:
             return
 
@@ -861,8 +726,8 @@ class LibraryScreen(Screen[None]):
         self.sync_action_controls()
         self.refresh_article_list()
 
-    def action_open_settings(self) -> None:
-        self.app.push_screen(SettingsScreen(self.store))
+    def open_settings(self) -> None:
+        self.app.push_screen(ImportArticlesScreen(self.store))
 
     def handle_save(self) -> None:
         title = self.query_one("#editor-title", Input).value.strip()
@@ -873,7 +738,7 @@ class LibraryScreen(Screen[None]):
             return
 
         if self.current_mode == "article" and not title:
-            self.query_one("#status", Static).update("[missing] name for doc")
+            self.query_one("#status", Static).update("[missing] name")
             return
 
         target_article_id = self.selected_article_id or str(uuid4())
@@ -887,15 +752,15 @@ class LibraryScreen(Screen[None]):
         self.articles = updated_articles
         self.is_creating_new = False
         self.selected_article_id = target_article_id
-        saved_article = next((article for article in self.articles if article.article_id == target_article_id), None)
+        saved_article = next(
+            (article for article in self.articles if article.article_id == target_article_id),
+            None,
+        )
         if saved_article is not None:
             self.current_mode = saved_article.mode
             self.query_one("#editor-title", Input).value = saved_article.title
         self.refresh_article_list()
-        self.query_one("#status", Static).update(f"[saved] {format_mode_label(self.current_mode)}")
-
-    def action_save_article(self) -> None:
-        self.handle_save()
+        self.query_one("#status", Static).update("[saved]")
 
     def handle_delete(self) -> None:
         if not self.selected_article_id:
@@ -907,24 +772,26 @@ class LibraryScreen(Screen[None]):
         self.refresh_article_list()
         self.query_one("#status", Static).update("[removed] item")
 
-    def action_delete_article(self) -> None:
-        self.handle_delete()
-
     def handle_start(self) -> None:
-        article = next((item for item in self.articles if item.article_id == self.selected_article_id), None)
+        article = next(
+            (item for item in self.articles if item.article_id == self.selected_article_id),
+            None,
+        )
         if article is None:
             self.query_one("#status", Static).update("[missing] select an item")
             return
 
         if not article.sentences:
-            unit = "lines" if article.mode == "note" else "sentences"
-            self.query_one("#status", Static).update(f"[invalid] {format_mode_label(article.mode)} has no {unit}")
+            self.query_one("#status", Static).update("[invalid] empty")
             return
 
-        self.app.push_screen(PracticeScreen(article, self.store))
+        self.app.push_screen(PracticeScreen(article, self.store, self.refresh_articles_from_store))
 
-    def action_run_article(self) -> None:
-        self.handle_start()
+    def refresh_articles_from_store(self) -> None:
+        selected_article_id = self.selected_article_id
+        self.articles = self.store.load_articles()
+        self.selected_article_id = selected_article_id
+        self.refresh_article_list()
 
 
 class WordflowApp(App[None]):
@@ -958,19 +825,9 @@ class WordflowApp(App[None]):
         height: 1fr;
     }
 
-    #practice-label {
-        color: #72797f;
-        margin-bottom: 0;
-    }
-
     #practice-title {
         color: #cfd4d8;
         text-style: bold;
-        margin-bottom: 0;
-    }
-
-    #practice-progress {
-        color: #686f75;
         margin-bottom: 0;
     }
 

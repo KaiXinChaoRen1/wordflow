@@ -68,3 +68,18 @@ def test_load_articles_normalizes_unknown_mode_to_article(tmp_path):
 
     assert len(articles) == 1
     assert articles[0].mode == "article"
+
+
+def test_complete_article_updates_count_and_caps_at_three(tmp_path):
+    store = ArticleStore(tmp_path / "articles.json")
+    articles = store.upsert_article([], title="A", body="One.", mode="article", article_id="1")
+    articles[0].completed_count = 2
+    store.save_articles(articles)
+
+    completed = store.complete_article("1")
+    assert completed is not None
+    assert completed.completed_count == 3
+
+    completed = store.complete_article("1")
+    assert completed is not None
+    assert completed.completed_count == 3
