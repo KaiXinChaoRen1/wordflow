@@ -22,6 +22,7 @@ class Article:
     body: str
     mode: ContentMode
     sentences: List[str]
+    completed_count: int = 0
 
 
 def _default_storage_path() -> Path:
@@ -83,6 +84,14 @@ class ArticleStore:
             else:
                 sentences = self.build_segments(body, mode)
 
+            completed_count = item.get("completed_count", 0)
+            if not isinstance(completed_count, int):
+                try:
+                    completed_count = int(completed_count)
+                except (ValueError, TypeError):
+                    completed_count = 0
+            completed_count = max(0, min(3, completed_count))
+
             articles.append(
                 Article(
                     article_id=article_id,
@@ -90,6 +99,7 @@ class ArticleStore:
                     body=body,
                     mode=mode,
                     sentences=sentences,
+                    completed_count=completed_count,
                 )
             )
         return articles
@@ -113,12 +123,21 @@ class ArticleStore:
         if normalized_mode == "note" and not cleaned_title:
             cleaned_title = self.default_note_title()
         sentences = self.build_segments(cleaned_body, normalized_mode)
+
+        existing_completed_count = 0
+        if article_id:
+            for article in articles:
+                if article.article_id == article_id:
+                    existing_completed_count = article.completed_count
+                    break
+
         article = Article(
             article_id=article_id or str(uuid4()),
             title=cleaned_title,
             body=cleaned_body,
             mode=normalized_mode,
             sentences=sentences,
+            completed_count=existing_completed_count,
         )
 
         updated = []

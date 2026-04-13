@@ -34,8 +34,13 @@ class ArticleItem(ListItem):
 
     def __init__(self, article: Article) -> None:
         self.article = article
-        meta = f"{format_mode_label(article.mode)} / {format_segment_label(article)}"
-        super().__init__(Label(f"{article.title}\n{meta}"))
+        mode_label = format_mode_label(article.mode)
+        gold_star = "[gold1]★[/gold1]"
+        gray_star = "[dim]☆[/dim]"
+        stars = gold_star * article.completed_count + gray_star * (3 - article.completed_count)
+        meta = f"{mode_label} {stars}"
+        from rich.text import Text
+        super().__init__(Label(Text.from_markup(f"{article.title}\n[dim]{meta}[/dim]")))
 
 
 @dataclass
@@ -201,9 +206,10 @@ class PracticeScreen(Screen[None]):
     sentence_index = reactive(0)
     word_index = reactive(0)
 
-    def __init__(self, article: Article) -> None:
+    def __init__(self, article: Article, store: ArticleStore) -> None:
         super().__init__()
         self.article = article
+        self.store = store
         self.current_words = extract_words(self.article.sentences[0]) if self.article.sentences else []
         self.current_prefix = ""
         self.syncing_input = False
@@ -381,6 +387,19 @@ class PracticeScreen(Screen[None]):
         self.query_one("#word-input", Input).disabled = True
         self.query_one("#practice-message", Static).update("[done] press Esc to return")
 
+        # Update completion count (max 3)
+        if self.article.completed_count < 3:
+            self.article.completed_count += 1
+            # Save the updated article
+            articles = self.store.load_articles()
+            updated_articles = []
+            for art in articles:
+                if art.article_id == self.article.article_id:
+                    updated_articles.append(self.article)
+                else:
+                    updated_articles.append(art)
+            self.store.save_articles(updated_articles)
+
 
 class LibraryScreen(Screen[None]):
     """Main library management screen."""
@@ -430,13 +449,40 @@ class LibraryScreen(Screen[None]):
         border: none;
         background: transparent;
         color: #767d83;
+        text-style: none;
     }
 
     .filter-button.-active {
-        background: transparent;
         border: none;
+        background: transparent;
         color: #cfd4d8;
         text-style: bold underline;
+    }
+
+    .filter-button:hover {
+        border: none;
+        background: transparent;
+        color: #8d949a;
+    }
+
+    .filter-button:focus {
+        border: none;
+        background: transparent;
+        outline: none;
+    }
+
+    #filter-switch Button {
+        border: none;
+    }
+
+    #filter-switch Button:focus {
+        border: none;
+        outline: none;
+    }
+
+    #filter-switch Button.-active {
+        border: none;
+        outline: none;
     }
 
     #editor-card {
@@ -875,7 +921,7 @@ class LibraryScreen(Screen[None]):
             self.query_one("#status", Static).update(f"[invalid] {format_mode_label(article.mode)} has no {unit}")
             return
 
-        self.app.push_screen(PracticeScreen(article))
+        self.app.push_screen(PracticeScreen(article, self.store))
 
     def action_run_article(self) -> None:
         self.handle_start()
