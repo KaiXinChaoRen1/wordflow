@@ -12,6 +12,11 @@ dependencies = [
   "textual>=0.58.0,<1.0.0",
 ]
 
+[project.optional-dependencies]
+build = [
+  "pyinstaller>=6.0",
+]
+
 [project.scripts]
 wordflow = "wordflow.__main__:main"
 

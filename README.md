@@ -91,3 +91,29 @@ cd /Users/lwq/workspace/spelllane
 pytest -q
 ```
 
+## Windows 单文件打包
+
+Windows `.exe` 需要在 Windows 环境中构建。PowerShell 中执行：
+
+```powershell
+cd path\to\spelllane
+.\scripts\build-windows.cmd
+```
+
+生成文件：
+
+```text
+dist\windows\wordflow.exe
+```
+
+把 `wordflow.exe` 放到例如 `C:\Tools\wordflow\wordflow.exe`，并把目录加入 `PATH`：
+
+```powershell
+setx PATH "$env:PATH;C:\Tools\wordflow"
+```
+
+重新打开终端后执行：
+
+```powershell
+wordflow
+```
