@@ -117,3 +117,33 @@ setx PATH "$env:PATH;C:\Tools\wordflow"
 ```powershell
 wordflow
 ```
+
+## Linux 单文件打包
+
+Linux 可执行文件需要在 Linux 环境中构建。执行：
+
+```bash
+cd /path/to/spelllane
+./scripts/build-linux.sh
+```
+
+生成文件：
+
+```text
+dist/linux/wordflow
+```
+
+可以直接运行：
+
+```bash
+./dist/linux/wordflow
+```
+
+放到用户 PATH 后可直接执行：
+
+```bash
+mkdir -p ~/.local/bin
+cp dist/linux/wordflow ~/.local/bin/wordflow
+chmod +x ~/.local/bin/wordflow
+wordflow
+```
