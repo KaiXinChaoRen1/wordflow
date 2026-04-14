@@ -15,7 +15,6 @@ from textual.screen import Screen
 from textual.widgets import (
     Button,
     Footer,
-    Header,
     Input,
     Label,
     ListItem,
@@ -80,7 +79,6 @@ class ImportArticlesScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         storage_path = str(self.store.path.expanduser())
         legacy_path = "~/.spelllane/articles.json"
-        yield Header()
         with Vertical(id="settings-detail-root"):
             yield Static("data path", classes="settings-title")
             yield Static(
@@ -122,7 +120,6 @@ class PracticeScreen(Screen[None]):
         self.is_complete = False
 
     def compose(self) -> ComposeResult:
-        yield Header()
         with Vertical(id="practice-root"):
             yield Static(self.article.title, id="practice-title")
             with VerticalScroll(id="article-view"):
@@ -464,12 +461,6 @@ class LibraryScreen(Screen[None]):
         text-style: bold;
     }
 
-    Header {
-        dock: top;
-        background: #101113;
-        color: #666c72;
-    }
-
     Footer {
         dock: bottom;
         background: #101113;
@@ -500,7 +491,6 @@ class LibraryScreen(Screen[None]):
         self.previous_filter: ContentMode = "article"
 
     def compose(self) -> ComposeResult:
-        yield Header()
         with Horizontal(id="library-root"):
             with Vertical(id="library-sidebar"):
                 with Vertical(id="sidebar-card"):
@@ -800,15 +790,8 @@ class WordflowApp(App[None]):
     TITLE = "Indexer"
     SUB_TITLE = "local records"
     ENABLE_COMMAND_PALETTE = False
-    COMMAND_PALETTE_BINDING = ""
 
     CSS = """
-    Header {
-        dock: top;
-        background: #101113;
-        color: #666c72;
-    }
-
     Footer {
         dock: bottom;
         background: #101113;
@@ -871,7 +854,3 @@ class WordflowApp(App[None]):
 
     def on_mount(self) -> None:
         self.push_screen(LibraryScreen(ArticleStore()))
-
-    def action_command_palette(self) -> None:
-        """Disable the default Textual command palette."""
-        return
