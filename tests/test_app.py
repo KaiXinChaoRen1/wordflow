@@ -161,14 +161,42 @@ def test_delete_requires_selection(store_path):
     run(scenario)
 
 
-def test_delete_removes_selected_article(store_path):
+def test_delete_needs_two_presses(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Doomed", "Hello world.")
         lib.selected_article_id = lib.articles[0].article_id
-        lib.handle_delete()
+
+        lib.handle_delete()  # first press only arms
+        await pilot.pause()
+        assert len(lib.articles) == 1
+        assert status_text(lib) == "[confirm] press Del again"
+
+        lib.handle_delete()  # second press deletes
         await pilot.pause()
         assert lib.articles == []
         assert status_text(lib) == "[removed] item"
+
+    run(scenario)
+
+
+def test_delete_confirmation_resets_when_selection_changes(store_path):
+    async def scenario(app, pilot):
+        await make_article(pilot, app, "Keep", "Alpha beta.")
+        lib = await make_article(pilot, app, "Other", "Gamma delta.")
+
+        lib.selected_article_id = lib.articles[0].article_id
+        lib.handle_delete()  # arm deletion of first
+        await pilot.pause()
+        assert status_text(lib) == "[confirm] press Del again"
+
+        # switching to another article disarms the pending delete
+        lib.load_article(lib.articles[1])
+        await pilot.pause()
+        assert lib.pending_delete_id is None
+
+        lib.handle_delete()  # only re-arms, does not delete
+        await pilot.pause()
+        assert len(lib.articles) == 2
 
     run(scenario)
 
@@ -241,7 +269,8 @@ def test_ctrl_d_deletes_from_list(store_path):
         lib.selected_article_id = lib.articles[0].article_id
         lib.query_one("#article-list").focus()
         await pilot.pause()
-        await pilot.press("ctrl+d")
+        await pilot.press("ctrl+d")  # arm
+        await pilot.press("ctrl+d")  # confirm
         await pilot.pause()
         assert lib.articles == []
 

@@ -523,6 +523,8 @@ class LibraryScreen(Screen[None]):
         # whether there are unsaved edits.
         self.loaded_title = ""
         self.loaded_body = ""
+        # Article armed for deletion, awaiting a confirming second Del press.
+        self.pending_delete_id: Optional[str] = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="library-root"):
@@ -607,6 +609,7 @@ class LibraryScreen(Screen[None]):
 
     def load_article(self, article: Article, announce: bool = True) -> None:
         self.is_creating_new = False
+        self.pending_delete_id = None
         self.selected_article_id = article.article_id
         self.current_mode = article.mode
         self.query_one("#editor-title", Input).value = article.title
@@ -618,6 +621,7 @@ class LibraryScreen(Screen[None]):
             self.set_status(f"[ready] {article.title}")
 
     def clear_editor(self, announce: bool = True) -> None:
+        self.pending_delete_id = None
         self.selected_article_id = None
         if not self.is_creating_new:
             self.current_mode = self.current_filter
@@ -836,6 +840,12 @@ class LibraryScreen(Screen[None]):
             self.set_status("[missing] select an item")
             return
 
+        if self.pending_delete_id != self.selected_article_id:
+            self.pending_delete_id = self.selected_article_id
+            self.set_status("[confirm] press Del again")
+            return
+
+        self.pending_delete_id = None
         self.articles = self.store.delete_article(self.articles, self.selected_article_id)
         self.selected_article_id = None
         self.refresh_article_list(announce_status=False)
