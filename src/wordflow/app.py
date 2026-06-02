@@ -500,6 +500,10 @@ class LibraryScreen(Screen[None]):
         # When False, the next (deferred) reconcile keeps the status the
         # current action just set instead of replacing it with [ready]/[idle].
         self.announce_on_reconcile = True
+        # Snapshot of the editor's last saved/loaded content, used to tell
+        # whether there are unsaved edits.
+        self.loaded_title = ""
+        self.loaded_body = ""
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="library-root"):
@@ -588,6 +592,7 @@ class LibraryScreen(Screen[None]):
         self.current_mode = article.mode
         self.query_one("#editor-title", Input).value = article.title
         self.query_one("#article-body", TextArea).text = article.body
+        self.mark_editor_saved(article.title, article.body)
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
@@ -599,6 +604,7 @@ class LibraryScreen(Screen[None]):
             self.current_mode = self.current_filter
         self.query_one("#editor-title", Input).value = ""
         self.query_one("#article-body", TextArea).text = ""
+        self.mark_editor_saved("", "")
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
@@ -621,6 +627,23 @@ class LibraryScreen(Screen[None]):
     def set_status(self, text: str) -> None:
         self.query_one("#status", Static).update(text)
 
+    def mark_editor_saved(self, title: str, body: str) -> None:
+        self.loaded_title = title
+        self.loaded_body = body
+
+    def editor_is_dirty(self) -> bool:
+        title = self.query_one("#editor-title", Input).value
+        body = self.query_one("#article-body", TextArea).text
+        return title != self.loaded_title or body != self.loaded_body
+
+    @on(Input.Changed, "#editor-title")
+    @on(TextArea.Changed, "#article-body")
+    def handle_editor_changed(self) -> None:
+        # Comparing against the saved snapshot means programmatic loads (which
+        # set value == snapshot) never flag as edited, so no guard is needed.
+        if self.editor_is_dirty():
+            self.set_status("[edited]")
+
     def sync_filter_controls(self) -> None:
         article_button = self.query_one("#filter-article", Static)
         note_button = self.query_one("#filter-note", Static)
@@ -637,9 +660,9 @@ class LibraryScreen(Screen[None]):
                 button.remove_class("-active")
 
     def sync_action_controls(self) -> None:
-        save_button = self.query_one("#action-save", Button)
         cancel_button = self.query_one("#action-cancel-new", Button)
-        save_button.display = self.is_creating_new
+        # Save is always available so edits to existing articles can be stored;
+        # Cancel only appears while drafting a brand-new item.
         cancel_button.display = self.is_creating_new
 
     def filtered_articles(self) -> List[Article]:
@@ -661,10 +684,10 @@ class LibraryScreen(Screen[None]):
         self.current_mode = mode
         self.current_filter = mode
         self.selected_article_id = None
-        self.query_one("#editor-title", Input).value = (
-            self.store.default_note_title() if mode == "note" else ""
-        )
+        new_title = self.store.default_note_title() if mode == "note" else ""
+        self.query_one("#editor-title", Input).value = new_title
         self.query_one("#article-body", TextArea).text = ""
+        self.mark_editor_saved(new_title, "")
         self.set_status("[new] edit then save")
         self.sync_filter_controls()
         self.sync_action_controls()
@@ -768,6 +791,7 @@ class LibraryScreen(Screen[None]):
         if saved_article is not None:
             self.current_mode = saved_article.mode
             self.query_one("#editor-title", Input).value = saved_article.title
+            self.mark_editor_saved(saved_article.title, saved_article.body)
         self.refresh_article_list(announce_status=False)
         self.set_status("[saved]")
 

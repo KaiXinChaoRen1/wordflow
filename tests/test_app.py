@@ -65,6 +65,28 @@ def test_save_creates_article_and_lists_it(store_path):
     run(scenario)
 
 
+def test_editing_existing_article_can_be_saved(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "A", "Hello world.")
+        lib.load_article(lib.articles[0])
+        await pilot.pause()
+        assert lib.query_one("#action-save").display is True
+        assert not lib.editor_is_dirty()
+
+        lib.query_one("#article-body").text = "Changed body now."
+        await pilot.pause()
+        assert lib.editor_is_dirty()
+        assert status_text(lib) == "[edited]"
+
+        lib.handle_save()
+        await pilot.pause()
+        assert status_text(lib) == "[saved]"
+        assert not lib.editor_is_dirty()
+        assert ArticleStore(store_path).load_articles()[0].body == "Changed body now."
+
+    run(scenario)
+
+
 def test_save_requires_body(store_path):
     async def scenario(app, pilot):
         lib = app.screen
@@ -72,6 +94,7 @@ def test_save_requires_body(store_path):
         await pilot.pause()
         lib.query_one("#editor-title").value = "T"
         lib.query_one("#article-body").text = "   "
+        await pilot.pause()  # let editor-change events settle as during typing
         lib.handle_save()
         await pilot.pause()
         assert status_text(lib) == "[missing] body"
@@ -87,6 +110,7 @@ def test_save_article_requires_title(store_path):
         await pilot.pause()
         lib.query_one("#editor-title").value = ""
         lib.query_one("#article-body").text = "Body here."
+        await pilot.pause()  # let editor-change events settle as during typing
         lib.handle_save()
         await pilot.pause()
         assert status_text(lib) == "[missing] name"
