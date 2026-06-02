@@ -316,6 +316,30 @@ def test_completing_article_awards_star_and_returns_on_keypress(store_path):
     run(scenario)
 
 
+def test_repeat_practice_with_r_key(store_path):
+    async def scenario(app, pilot):
+        _, practice = await start_practice(pilot, app, "Hi there.")
+        for char in "Hithere":
+            await pilot.press(char)
+        await pilot.pause()
+        assert practice.is_complete
+        assert ArticleStore(store_path).load_articles()[0].completed_count == 1
+
+        await pilot.press("r")
+        await pilot.pause()
+        assert isinstance(app.screen, PracticeScreen)
+        assert not practice.is_complete
+        assert practice.sentence_index == 0 and practice.word_index == 0
+        assert practice.query_one("#word-input").disabled is False
+
+        for char in "Hithere":
+            await pilot.press(char)
+        await pilot.pause()
+        assert ArticleStore(store_path).load_articles()[0].completed_count == 2
+
+    run(scenario)
+
+
 def test_completed_words_are_locked(store_path):
     async def scenario(app, pilot):
         _, practice = await start_practice(pilot, app, "Hi there.")

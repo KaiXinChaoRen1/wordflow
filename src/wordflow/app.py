@@ -287,9 +287,24 @@ class PracticeScreen(Screen[None]):
         input_widget.cursor_position = len(input_widget.value)
 
     def on_key(self, event) -> None:
-        if self.is_complete:
-            event.stop()
+        if not self.is_complete:
+            return
+        event.stop()
+        if event.key == "r":
+            self.restart_practice()
+        else:
             self.app.pop_screen()
+
+    def restart_practice(self) -> None:
+        self.is_complete = False
+        self.sentence_index = 0
+        self.word_index = 0
+        self.current_prefix = ""
+        self.pending_sync_value = None
+        input_widget = self.query_one("#word-input", Input)
+        input_widget.disabled = False
+        self.refresh_sentence()
+        input_widget.focus()
 
     def finish_article(self) -> None:
         if self.is_complete:
@@ -303,7 +318,7 @@ class PracticeScreen(Screen[None]):
         input_widget = self.query_one("#word-input", Input)
         input_widget.value = ""
         input_widget.disabled = True
-        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  press any key")
+        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  r repeat · any key back")
 
         completed_article = self.store.complete_article(self.article.article_id)
         if completed_article is not None:
