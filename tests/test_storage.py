@@ -19,7 +19,23 @@ def test_upsert_article_splits_body_into_sentences(tmp_path):
 
     articles = store.upsert_article([], title="A", body="One. Two.", mode="article")
 
+    assert articles[0].group == "Ungrouped"
     assert articles[0].sentences == ["One.", "Two."]
+
+
+def test_upsert_article_saves_group(tmp_path):
+    store = ArticleStore(tmp_path / "articles.json")
+
+    articles = store.upsert_article(
+        [],
+        title="A",
+        body="One.",
+        mode="article",
+        group="New Concept 1",
+    )
+
+    assert articles[0].group == "New Concept 1"
+    assert ArticleStore(store.path).load_articles()[0].group == "New Concept 1"
 
 
 def test_upsert_existing_article_preserves_completed_count(tmp_path):
@@ -75,6 +91,7 @@ def test_load_articles_defaults_legacy_items_to_article_mode(tmp_path):
 
     assert len(articles) == 1
     assert articles[0].mode == "article"
+    assert articles[0].group == "Ungrouped"
     assert articles[0].sentences == ["One day it rained.", "We stayed in!"]
 
 
@@ -145,6 +162,16 @@ def test_load_articles_note_without_title_gets_default(tmp_path):
     assert article.title
 
 
+def test_load_articles_blank_group_gets_default(tmp_path):
+    path = tmp_path / "articles.json"
+    path.write_text(
+        json.dumps([{"article_id": "1", "title": "A", "body": "X.", "group": "  "}]),
+        encoding="utf-8",
+    )
+
+    assert ArticleStore(path).load_articles()[0].group == "Ungrouped"
+
+
 def test_complete_article_updates_count_and_caps_at_three(tmp_path):
     store = ArticleStore(tmp_path / "articles.json")
     articles = store.upsert_article([], title="A", body="One.", mode="article", article_id="1")
@@ -186,6 +213,7 @@ def test_save_and_load_round_trip_preserves_fields(tmp_path):
         title="Title",
         body="One. Two.",
         mode="article",
+        group="Book 1",
         sentences=["One.", "Two."],
         completed_count=1,
     )

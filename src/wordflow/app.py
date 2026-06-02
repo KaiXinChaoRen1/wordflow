@@ -24,7 +24,17 @@ from textual.widgets import (
 )
 
 from .parsing import extract_words
-from .storage import Article, ArticleStore, ContentMode
+from .storage import DEFAULT_GROUP, Article, ArticleStore, ContentMode
+
+
+class GroupHeader(ListItem):
+    """Quiet section label for grouped article rows."""
+
+    def __init__(self, group: str, count: int, expanded: bool) -> None:
+        self.group = group
+        self.count = count
+        marker = "-" if expanded else "+"
+        super().__init__(Label(Text.from_markup(f"[dim]{marker} {group} {count}[/dim]")))
 
 
 class ArticleItem(ListItem):
@@ -43,7 +53,7 @@ class ArticleItem(ListItem):
         )
         title = self.article.title or "(untitled)"
         marker = ">" if selected else " "
-        return Text.from_markup(f"{marker} {title}\n  {stars}")
+        return Text.from_markup(f"{marker}   {title}\n    {stars}")
 
     def set_selected(self, selected: bool) -> None:
         self._label.update(self._label_text(selected))
@@ -375,6 +385,8 @@ class LibraryScreen(Screen[None]):
         border: none;
         background: #111316;
         color: #aeb4b9;
+        scrollbar-size-vertical: 0;
+        scrollbar-size-horizontal: 0;
     }
 
     #filter-switch {
@@ -432,6 +444,17 @@ class LibraryScreen(Screen[None]):
         margin-bottom: 1;
     }
 
+    #editor-group {
+        width: 1fr;
+        height: 1;
+        min-height: 1;
+        padding: 0 1;
+        border: none;
+        background: #111316;
+        color: #9fa6ac;
+        margin-bottom: 1;
+    }
+
     #article-body {
         height: 1fr;
         margin: 0;
@@ -484,6 +507,11 @@ class LibraryScreen(Screen[None]):
         color: #aeb4b9;
     }
 
+    #article-list > ListItem.group-header Label {
+        color: #697178;
+        text-style: bold;
+    }
+
     #article-list > ListItem.-hovered,
     #article-list > ListItem.-highlight,
     #article-list:focus > ListItem.-highlight,
@@ -508,6 +536,7 @@ class LibraryScreen(Screen[None]):
         scrollbar-background: #111316;
         scrollbar-color: #30363b;
         scrollbar-color-hover: #3b4248;
+        scrollbar-size-vertical: 1;
     }
 
     Label {
@@ -532,9 +561,11 @@ class LibraryScreen(Screen[None]):
         # Snapshot of the editor's last saved/loaded content, used to tell
         # whether there are unsaved edits.
         self.loaded_title = ""
+        self.loaded_group = DEFAULT_GROUP
         self.loaded_body = ""
         # Article armed for deletion, awaiting a confirming second Del press.
         self.pending_delete_id: Optional[str] = None
+        self.expanded_groups: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="library-root"):
@@ -556,6 +587,7 @@ class LibraryScreen(Screen[None]):
                         )
                     yield ListView(id="article-list")
             with Vertical(id="editor-card"):
+                yield Input(placeholder="group", id="editor-group")
                 yield Input(placeholder="name", id="editor-title")
                 yield TextArea("", id="article-body")
                 yield Static("", id="status")
@@ -577,19 +609,33 @@ class LibraryScreen(Screen[None]):
     def refresh_article_list(self, announce_status: bool = True) -> None:
         self.announce_on_reconcile = announce_status
         list_view = self.query_one("#article-list", ListView)
+        list_view.index = None
         list_view.clear()
-        visible_articles = self.filtered_articles()
-        if visible_articles:
-            list_view.extend([ArticleItem(article) for article in visible_articles])
+        self.call_after_refresh(self.populate_article_list)
+
+    def populate_article_list(self) -> None:
+        list_view = self.query_one("#article-list", ListView)
+        visible_items = self.visible_list_items()
+        if visible_items:
+            list_view.extend(visible_items)
         self.call_after_refresh(self.reconcile_article_selection)
+
+    def visible_list_items(self) -> List[ListItem]:
+        items: List[ListItem] = []
+        for group, articles in self.grouped_articles():
+            expanded = group in self.expanded_groups
+            header = GroupHeader(group, len(articles), expanded)
+            header.add_class("group-header")
+            items.append(header)
+            if expanded:
+                items.extend(ArticleItem(article) for article in articles)
+        return items
 
     def reconcile_article_selection(self) -> None:
         announce = self.announce_on_reconcile
         self.announce_on_reconcile = True
         list_view = self.query_one("#article-list", ListView)
-        visible_articles = self.filtered_articles()
-
-        if not visible_articles:
+        if not self.filtered_articles():
             self.selected_article_id = None
             list_view.index = None
             self.clear_editor(announce=announce)
@@ -603,8 +649,11 @@ class LibraryScreen(Screen[None]):
             return
 
         selected_index: Optional[int] = None
-        for index, article in enumerate(visible_articles):
-            if article.article_id == self.selected_article_id:
+        for index, item in enumerate(list_view.children):
+            if (
+                isinstance(item, ArticleItem)
+                and item.article.article_id == self.selected_article_id
+            ):
                 selected_index = index
                 break
 
@@ -615,16 +664,20 @@ class LibraryScreen(Screen[None]):
             return
 
         list_view.index = selected_index
-        self.load_article(visible_articles[selected_index], announce=announce)
+        selected_item = list_view.children[selected_index]
+        if isinstance(selected_item, ArticleItem):
+            self.load_article(selected_item.article, announce=announce)
 
     def load_article(self, article: Article, announce: bool = True) -> None:
         self.is_creating_new = False
         self.pending_delete_id = None
+        self.expanded_groups.add(article.group)
         self.selected_article_id = article.article_id
         self.current_mode = article.mode
         self.query_one("#editor-title", Input).value = article.title
+        self.query_one("#editor-group", Input).value = article.group
         self.query_one("#article-body", TextArea).text = article.body
-        self.mark_editor_saved(article.title, article.body)
+        self.mark_editor_saved(article.title, article.group, article.body)
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
@@ -635,9 +688,11 @@ class LibraryScreen(Screen[None]):
         self.selected_article_id = None
         if not self.is_creating_new:
             self.current_mode = self.current_filter
+        group = self.default_group_for_mode(self.current_mode)
         self.query_one("#editor-title", Input).value = ""
+        self.query_one("#editor-group", Input).value = group
         self.query_one("#article-body", TextArea).text = ""
-        self.mark_editor_saved("", "")
+        self.mark_editor_saved("", group, "")
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
@@ -656,19 +711,29 @@ class LibraryScreen(Screen[None]):
     def focus_editor(self) -> None:
         self.query_one("#editor-title", Input).focus()
 
+    def default_group_for_mode(self, mode: ContentMode) -> str:
+        return "Personal notes" if mode == "note" else DEFAULT_GROUP
+
     def set_status(self, text: str) -> None:
         self.query_one("#status", Static).update(text)
 
-    def mark_editor_saved(self, title: str, body: str) -> None:
+    def mark_editor_saved(self, title: str, group: str, body: str) -> None:
         self.loaded_title = title
+        self.loaded_group = group
         self.loaded_body = body
 
     def editor_is_dirty(self) -> bool:
         title = self.query_one("#editor-title", Input).value
+        group = self.query_one("#editor-group", Input).value.strip() or DEFAULT_GROUP
         body = self.query_one("#article-body", TextArea).text
-        return title != self.loaded_title or body != self.loaded_body
+        return (
+            title != self.loaded_title
+            or group != self.loaded_group
+            or body != self.loaded_body
+        )
 
     @on(Input.Changed, "#editor-title")
+    @on(Input.Changed, "#editor-group")
     @on(TextArea.Changed, "#article-body")
     def handle_editor_changed(self) -> None:
         # Comparing against the saved snapshot means programmatic loads (which
@@ -698,13 +763,33 @@ class LibraryScreen(Screen[None]):
         cancel_button.display = self.is_creating_new
 
     def filtered_articles(self) -> List[Article]:
-        return [article for article in self.articles if article.mode == self.current_filter]
+        return [
+            article
+            for _group, articles in self.grouped_articles()
+            for article in articles
+        ]
+
+    def grouped_articles(self) -> List[tuple[str, List[Article]]]:
+        groups: List[str] = []
+        grouped: dict[str, List[Article]] = {}
+        for article in self.articles:
+            if article.mode != self.current_filter:
+                continue
+            if article.group not in grouped:
+                groups.append(article.group)
+                grouped[article.group] = []
+            grouped[article.group].append(article)
+        return [
+            (group, grouped[group])
+            for group in groups
+        ]
 
     def set_filter(self, mode: ContentMode) -> None:
         self.is_creating_new = False
         self.current_filter = mode
         self.current_mode = mode
         self.selected_article_id = None
+        self.expanded_groups.clear()
         self.sync_filter_controls()
         self.sync_action_controls()
         self.refresh_article_list()
@@ -717,9 +802,11 @@ class LibraryScreen(Screen[None]):
         self.current_filter = mode
         self.selected_article_id = None
         new_title = self.store.default_note_title() if mode == "note" else ""
+        new_group = self.default_group_for_mode(mode)
         self.query_one("#editor-title", Input).value = new_title
+        self.query_one("#editor-group", Input).value = new_group
         self.query_one("#article-body", TextArea).text = ""
-        self.mark_editor_saved(new_title, "")
+        self.mark_editor_saved(new_title, new_group, "")
         self.set_status("[new] edit then save")
         self.sync_filter_controls()
         self.sync_action_controls()
@@ -735,8 +822,30 @@ class LibraryScreen(Screen[None]):
     @on(ListView.Selected, "#article-list")
     def handle_select(self, event: ListView.Selected) -> None:
         # Enter (or click) on a list item jumps straight into practice.
+        if isinstance(event.item, GroupHeader):
+            self.toggle_group(event.item.group)
+            return
+        if not isinstance(event.item, ArticleItem):
+            return
         self.load_article_from_item(event.item)
         self.handle_start()
+
+    def toggle_group(self, group: str) -> None:
+        if group in self.expanded_groups:
+            self.expanded_groups.remove(group)
+            selected = next(
+                (
+                    article
+                    for article in self.articles
+                    if article.article_id == self.selected_article_id
+                ),
+                None,
+            )
+            if selected is not None and selected.group == group:
+                self.clear_editor(announce=False)
+        else:
+            self.expanded_groups.add(group)
+        self.refresh_article_list(announce_status=False)
 
     def load_article_from_item(self, item: Optional[ListItem]) -> None:
         if not isinstance(item, ArticleItem):
@@ -812,6 +921,7 @@ class LibraryScreen(Screen[None]):
 
     def handle_save(self) -> None:
         title = self.query_one("#editor-title", Input).value.strip()
+        group = self.query_one("#editor-group", Input).value.strip() or DEFAULT_GROUP
         body = self.query_one("#article-body", TextArea).text.strip()
 
         if not body:
@@ -828,6 +938,7 @@ class LibraryScreen(Screen[None]):
             title=title,
             body=body,
             mode=self.current_mode,
+            group=group,
             article_id=target_article_id,
         )
         self.articles = updated_articles
@@ -839,8 +950,14 @@ class LibraryScreen(Screen[None]):
         )
         if saved_article is not None:
             self.current_mode = saved_article.mode
+            self.expanded_groups.add(saved_article.group)
             self.query_one("#editor-title", Input).value = saved_article.title
-            self.mark_editor_saved(saved_article.title, saved_article.body)
+            self.query_one("#editor-group", Input).value = saved_article.group
+            self.mark_editor_saved(
+                saved_article.title,
+                saved_article.group,
+                saved_article.body,
+            )
         self.refresh_article_list(announce_status=False)
         self.set_status("[saved]")
 
@@ -918,8 +1035,8 @@ class WordflowApp(App[None]):
         border: none;
         background: #111316;
         scrollbar-background: #111316;
-        scrollbar-color: #30363b;
-        scrollbar-color-hover: #3b4248;
+        scrollbar-color: #24282c;
+        scrollbar-color-hover: #30363b;
         scrollbar-size-vertical: 1;
     }
 

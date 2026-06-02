@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from wordflow.app import ArticleItem, LibraryScreen, PracticeScreen, WordflowApp
+from wordflow.app import ArticleItem, GroupHeader, LibraryScreen, PracticeScreen, WordflowApp
 from wordflow.storage import ArticleStore
 
 
@@ -41,11 +41,13 @@ def run(scenario):
     asyncio.run(driver())
 
 
-async def make_article(pilot, app, title, body, mode="article"):
+async def make_article(pilot, app, title, body, mode="article", group=None):
     lib = app.screen
     lib.start_new_item(mode)
     await pilot.pause()
     lib.query_one("#editor-title").value = title
+    if group is not None:
+        lib.query_one("#editor-group").value = group
     lib.query_one("#article-body").text = body
     lib.handle_save()
     await pilot.pause()
@@ -60,6 +62,7 @@ def test_save_creates_article_and_lists_it(store_path):
         lib = await make_article(pilot, app, "Greeting", "Hello world.")
         assert len(lib.articles) == 1
         assert status_text(lib) == "[saved]"
+        assert lib.articles[0].group == "Ungrouped"
         assert lib.articles[0].sentences == ["Hello world."]
 
     run(scenario)
@@ -74,6 +77,7 @@ def test_editing_existing_article_can_be_saved(store_path):
         assert not lib.editor_is_dirty()
 
         lib.query_one("#article-body").text = "Changed body now."
+        lib.query_one("#editor-group").value = "Work"
         await pilot.pause()
         assert lib.editor_is_dirty()
         assert status_text(lib) == "[edited]"
@@ -82,7 +86,9 @@ def test_editing_existing_article_can_be_saved(store_path):
         await pilot.pause()
         assert status_text(lib) == "[saved]"
         assert not lib.editor_is_dirty()
-        assert ArticleStore(store_path).load_articles()[0].body == "Changed body now."
+        saved = ArticleStore(store_path).load_articles()[0]
+        assert saved.body == "Changed body now."
+        assert saved.group == "Work"
 
     run(scenario)
 
@@ -130,6 +136,7 @@ def test_memo_save_allows_empty_title(store_path):
         await pilot.pause()
         assert len(lib.articles) == 1
         assert lib.articles[0].mode == "note"
+        assert lib.articles[0].group == "Personal notes"
         assert lib.articles[0].title  # default timestamp title
 
     run(scenario)
@@ -147,6 +154,67 @@ def test_filter_separates_articles_and_memos(store_path):
         lib.set_filter("note")
         await pilot.pause()
         assert [a.title for a in lib.filtered_articles()] == ["Memo"]
+
+    run(scenario)
+
+
+def test_articles_are_grouped_in_the_list(store_path):
+    async def scenario(app, pilot):
+        await make_article(pilot, app, "One", "Alpha.", group="Book 1")
+        await make_article(pilot, app, "Two", "Beta.", group="Book 2")
+        lib = await make_article(pilot, app, "Three", "Gamma.", group="Book 1")
+        lib.refresh_article_list()
+        await pilot.pause()
+
+        rows = []
+        for item in lib.query_one("#article-list").query("ListItem"):
+            if isinstance(item, GroupHeader):
+                rows.append(("group", item.group))
+            elif isinstance(item, ArticleItem):
+                rows.append(("article", item.article.title))
+
+        assert rows == [
+            ("group", "Book 1"),
+            ("article", "One"),
+            ("article", "Three"),
+            ("group", "Book 2"),
+            ("article", "Two"),
+        ]
+
+    run(scenario)
+
+
+def test_enter_on_group_header_does_not_start_practice(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "One", "Alpha.", group="Book 1")
+        header = next(
+            item
+            for item in lib.query_one("#article-list").query("ListItem")
+            if isinstance(item, GroupHeader)
+        )
+        lib.handle_select(type("Event", (), {"item": header})())
+        await pilot.pause()
+        assert isinstance(app.screen, LibraryScreen)
+
+    run(scenario)
+
+
+def test_group_headers_expand_on_enter(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "One", "Alpha.", group="Book 1")
+        lib.expanded_groups.clear()
+        lib.selected_article_id = None
+        lib.refresh_article_list()
+        await pilot.pause()
+
+        rows = list(lib.query_one("#article-list").query("ListItem"))
+        assert [type(item).__name__ for item in rows] == ["GroupHeader"]
+
+        lib.handle_select(type("Event", (), {"item": rows[0]})())
+        await pilot.pause()
+
+        rows = list(lib.query_one("#article-list").query("ListItem"))
+        assert [type(item).__name__ for item in rows] == ["GroupHeader", "ArticleItem"]
 
     run(scenario)
 

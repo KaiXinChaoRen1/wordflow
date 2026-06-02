@@ -13,6 +13,7 @@ from uuid import uuid4
 from .parsing import split_lines, split_sentences
 
 ContentMode = Literal["article", "note"]
+DEFAULT_GROUP = "Ungrouped"
 
 
 @dataclass
@@ -21,6 +22,7 @@ class Article:
     title: str
     body: str
     mode: ContentMode
+    group: str
     sentences: List[str]
     completed_count: int = 0
 
@@ -75,6 +77,7 @@ class ArticleStore:
             article_id = str(item.get("article_id") or uuid4())
             title = str(item.get("title", "")).strip()
             body = str(item.get("body", "")).strip()
+            group = str(item.get("group", "")).strip() or DEFAULT_GROUP
             if mode == "note" and not title:
                 title = self.default_note_title()
 
@@ -102,6 +105,7 @@ class ArticleStore:
                     title=title,
                     body=body,
                     mode=mode,
+                    group=group,
                     sentences=sentences,
                     completed_count=completed_count,
                 )
@@ -119,10 +123,12 @@ class ArticleStore:
         title: str,
         body: str,
         mode: ContentMode = "article",
+        group: str = DEFAULT_GROUP,
         article_id: Optional[str] = None,
     ) -> List[Article]:
         cleaned_title = title.strip()
         cleaned_body = body.strip()
+        cleaned_group = group.strip() or DEFAULT_GROUP
         normalized_mode = self.normalize_mode(mode)
         if normalized_mode == "note" and not cleaned_title:
             cleaned_title = self.default_note_title()
@@ -140,6 +146,7 @@ class ArticleStore:
             title=cleaned_title,
             body=cleaned_body,
             mode=normalized_mode,
+            group=cleaned_group,
             sentences=sentences,
             completed_count=existing_completed_count,
         )
