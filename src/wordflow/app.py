@@ -157,10 +157,13 @@ class PracticeScreen(Screen[None]):
 
         self.refresh_article_view()
         self.sync_input_value()
-        self.query_one("#practice-message", Static).update("")
+        self.set_message("")
 
     def sentence_widget_id(self, index: int) -> str:
         return f"sentence-{index}"
+
+    def set_message(self, text: str) -> None:
+        self.query_one("#practice-message", Static).update(text)
 
     def refresh_article_view(self) -> None:
         for index, sentence in enumerate(self.article.sentences):
@@ -238,7 +241,7 @@ class PracticeScreen(Screen[None]):
 
         if not raw_value.startswith(locked_prefix):
             self.sync_input_value()
-            self.query_one("#practice-message", Static).update("[locked] completed words")
+            self.set_message("[locked] completed words")
             return
 
         guess = raw_value[len(locked_prefix) :].replace(" ", "")
@@ -247,14 +250,12 @@ class PracticeScreen(Screen[None]):
         if not guess:
             self.current_prefix = ""
             self.sync_input_value()
-            self.query_one("#practice-message", Static).update("")
+            self.set_message("")
             return
 
         if not target.casefold().startswith(guess.casefold()):
             self.sync_input_value()
-            self.query_one("#practice-message", Static).update(
-                f"[hint] next -> {target[len(self.current_prefix)]}"
-            )
+            self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
             return
 
         self.current_prefix = guess
@@ -262,7 +263,7 @@ class PracticeScreen(Screen[None]):
         if guess.casefold() != target.casefold():
             self.sync_input_value()
             self.refresh_article_view()
-            self.query_one("#practice-message", Static).update("")
+            self.set_message("")
             return
 
         self.word_index += 1
@@ -277,7 +278,7 @@ class PracticeScreen(Screen[None]):
         self.refresh_article_view()
         self.sync_input_value()
         input_widget.cursor_position = len(input_widget.value)
-        self.query_one("#practice-message", Static).update("[step] word complete")
+        self.set_message("[step] word complete")
 
     @on(Input.Submitted, "#word-input")
     def handle_submit(self, event: Input.Submitted) -> None:
@@ -302,9 +303,7 @@ class PracticeScreen(Screen[None]):
         input_widget = self.query_one("#word-input", Input)
         input_widget.value = ""
         input_widget.disabled = True
-        self.query_one("#practice-message", Static).update(
-            "[bold #6fbf73]Good[/bold #6fbf73]  press any key"
-        )
+        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  press any key")
 
         completed_article = self.store.complete_article(self.article.article_id)
         if completed_article is not None:
@@ -592,7 +591,7 @@ class LibraryScreen(Screen[None]):
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
-            self.query_one("#status", Static).update(f"[ready] {article.title}")
+            self.set_status(f"[ready] {article.title}")
 
     def clear_editor(self, announce: bool = True) -> None:
         self.selected_article_id = None
@@ -603,7 +602,7 @@ class LibraryScreen(Screen[None]):
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
-            self.query_one("#status", Static).update("[idle] select or create")
+            self.set_status("[idle] select or create")
 
     def sync_article_list_selected_class(self) -> None:
         list_view = self.query_one("#article-list", ListView)
@@ -618,6 +617,9 @@ class LibraryScreen(Screen[None]):
 
     def focus_editor(self) -> None:
         self.query_one("#editor-title", Input).focus()
+
+    def set_status(self, text: str) -> None:
+        self.query_one("#status", Static).update(text)
 
     def sync_filter_controls(self) -> None:
         article_button = self.query_one("#filter-article", Static)
@@ -663,7 +665,7 @@ class LibraryScreen(Screen[None]):
             self.store.default_note_title() if mode == "note" else ""
         )
         self.query_one("#article-body", TextArea).text = ""
-        self.query_one("#status", Static).update("[new] edit then save")
+        self.set_status("[new] edit then save")
         self.sync_filter_controls()
         self.sync_action_controls()
         self.refresh_article_list()
@@ -741,11 +743,11 @@ class LibraryScreen(Screen[None]):
         body = self.query_one("#article-body", TextArea).text.strip()
 
         if not body:
-            self.query_one("#status", Static).update("[missing] body")
+            self.set_status("[missing] body")
             return
 
         if self.current_mode == "article" and not title:
-            self.query_one("#status", Static).update("[missing] name")
+            self.set_status("[missing] name")
             return
 
         target_article_id = self.selected_article_id or str(uuid4())
@@ -767,17 +769,17 @@ class LibraryScreen(Screen[None]):
             self.current_mode = saved_article.mode
             self.query_one("#editor-title", Input).value = saved_article.title
         self.refresh_article_list(announce_status=False)
-        self.query_one("#status", Static).update("[saved]")
+        self.set_status("[saved]")
 
     def handle_delete(self) -> None:
         if not self.selected_article_id:
-            self.query_one("#status", Static).update("[missing] select an item")
+            self.set_status("[missing] select an item")
             return
 
         self.articles = self.store.delete_article(self.articles, self.selected_article_id)
         self.selected_article_id = None
         self.refresh_article_list(announce_status=False)
-        self.query_one("#status", Static).update("[removed] item")
+        self.set_status("[removed] item")
 
     def handle_start(self) -> None:
         article = next(
@@ -785,11 +787,11 @@ class LibraryScreen(Screen[None]):
             None,
         )
         if article is None:
-            self.query_one("#status", Static).update("[missing] select an item")
+            self.set_status("[missing] select an item")
             return
 
         if not any(extract_words(sentence) for sentence in article.sentences):
-            self.query_one("#status", Static).update("[invalid] empty")
+            self.set_status("[invalid] empty")
             return
 
         self.app.push_screen(PracticeScreen(article, self.store, self.refresh_articles_from_store))
