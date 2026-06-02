@@ -315,7 +315,11 @@ class PracticeScreen(Screen[None]):
 class LibraryScreen(Screen[None]):
     """Main library management screen."""
 
-    BINDINGS = []
+    BINDINGS = [
+        ("ctrl+n", "new_article", "New"),
+        ("ctrl+s", "save", "Save"),
+        ("ctrl+d", "delete", "Del"),
+    ]
 
     CSS = """
     Screen {
@@ -750,6 +754,15 @@ class LibraryScreen(Screen[None]):
     @on(Button.Pressed, "#action-cancel-new")
     def handle_action_cancel_new_pressed(self) -> None:
         self.cancel_new()
+
+    def action_new_article(self) -> None:
+        self.handle_new()
+
+    def action_save(self) -> None:
+        self.handle_save()
+
+    def action_delete(self) -> None:
+        self.handle_delete()
 
     def handle_new(self) -> None:
         self.start_new_item("article")

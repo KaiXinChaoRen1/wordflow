@@ -215,6 +215,39 @@ def test_arrow_keys_preview_and_enter_starts_practice(store_path):
     run(scenario)
 
 
+def test_keyboard_shortcuts_new_and_save(store_path):
+    async def scenario(app, pilot):
+        lib = app.screen
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert lib.is_creating_new
+
+        lib.query_one("#editor-title").value = "KB"
+        lib.query_one("#article-body").text = "Hello world."
+        # ctrl+s reaches the screen even while the body editor is focused
+        lib.query_one("#article-body").focus()
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert len(lib.articles) == 1
+        assert status_text(lib) == "[saved]"
+
+    run(scenario)
+
+
+def test_ctrl_d_deletes_from_list(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "Doomed", "Hello world.")
+        lib.selected_article_id = lib.articles[0].article_id
+        lib.query_one("#article-list").focus()
+        await pilot.pause()
+        await pilot.press("ctrl+d")
+        await pilot.pause()
+        assert lib.articles == []
+
+    run(scenario)
+
+
 def test_start_requires_selection(store_path):
     async def scenario(app, pilot):
         lib = app.screen
