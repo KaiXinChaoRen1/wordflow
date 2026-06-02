@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from wordflow.app import LibraryScreen, PracticeScreen, WordflowApp
+from wordflow.app import ArticleItem, LibraryScreen, PracticeScreen, WordflowApp
 from wordflow.storage import ArticleStore
 
 
@@ -147,6 +147,24 @@ def test_filter_separates_articles_and_memos(store_path):
         lib.set_filter("note")
         await pilot.pause()
         assert [a.title for a in lib.filtered_articles()] == ["Memo"]
+
+    run(scenario)
+
+
+def test_selected_row_shows_marker(store_path):
+    async def scenario(app, pilot):
+        await make_article(pilot, app, "One", "Alpha.")
+        lib = await make_article(pilot, app, "Two", "Beta.")
+        lib.load_article(lib.articles[0])
+        await pilot.pause()
+
+        markers = {}
+        for item in lib.query_one("#article-list").query("ListItem"):
+            if isinstance(item, ArticleItem):
+                first_line = str(item._label.renderable).splitlines()[0]
+                markers[item.article.title] = first_line
+        assert markers["One"].startswith("> ")
+        assert markers["Two"].startswith("  ")
 
     run(scenario)
 

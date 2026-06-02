@@ -32,11 +32,21 @@ class ArticleItem(ListItem):
 
     def __init__(self, article: Article) -> None:
         self.article = article
+        self._label = Label(self._label_text(selected=False))
+        super().__init__(self._label)
+
+    def _label_text(self, selected: bool) -> Text:
         gold_star = "[gold1]★[/gold1]"
         gray_star = "[dim]☆[/dim]"
-        stars = gold_star * article.completed_count + gray_star * (3 - article.completed_count)
-        title = article.title or "(untitled)"
-        super().__init__(Label(Text.from_markup(f"{title}\n{stars}")))
+        stars = gold_star * self.article.completed_count + gray_star * (
+            3 - self.article.completed_count
+        )
+        title = self.article.title or "(untitled)"
+        marker = ">" if selected else " "
+        return Text.from_markup(f"{marker} {title}\n  {stars}")
+
+    def set_selected(self, selected: bool) -> None:
+        self._label.update(self._label_text(selected))
 
 
 class ImportArticlesScreen(Screen[None]):
@@ -431,7 +441,7 @@ class LibraryScreen(Screen[None]):
     }
 
     #status {
-        height: 2;
+        height: 1;
         margin-top: 1;
         color: #6a7177;
     }
@@ -639,10 +649,9 @@ class LibraryScreen(Screen[None]):
         for item in list_view.query("ListItem"):
             if not isinstance(item, ArticleItem):
                 continue
-            if selected_id and item.article.article_id == selected_id:
-                item.add_class("is-selected")
-            else:
-                item.remove_class("is-selected")
+            selected = bool(selected_id and item.article.article_id == selected_id)
+            item.set_class(selected, "is-selected")
+            item.set_selected(selected)
 
     def focus_editor(self) -> None:
         self.query_one("#editor-title", Input).focus()
