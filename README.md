@@ -21,13 +21,17 @@
   - `Article`：按句子切分后练习
   - `Memo`：按行切分后练习
 - **主界面布局**
-  - 左侧：内容列表（支持 `Article / Memo` 过滤）
-  - 右侧：标题与正文编辑、状态提示
-  - 底部：固定动作栏（`New A / New M / Save / Run / Del / Config / Cancel`）
+  - 左侧：内容列表（支持 `article / memo` 过滤）
+  - 右侧：分组、标题与正文编辑、状态提示
+  - 底部：固定动作栏（`+article / +memo / save / run / del / config / cancel`）
+- **键盘快捷键**
+  - `Ctrl+N` 新建、`Ctrl+S` 保存、`Ctrl+R` 开始练习
+  - `Ctrl+D` 删除（二次确认，待删行以 `!` 标记）、`Ctrl+T` 切换 article / memo
 - **练习模式**
   - 按当前单词逐字输入
   - 空格自动处理
-  - 已完成单词与当前进度实时反馈
+  - 已完成单词、句子进度（`n / total`）实时反馈
+  - 完成后 `r` 重练、`Esc` / `Enter` 返回（不会因误触退出）
 - **导入/导出思路（轻实现）**
   - 在 `Config` 中查看当前数据文件路径
   - 直接编辑该 JSON 文件即可导入或替换内容

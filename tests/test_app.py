@@ -136,7 +136,7 @@ def test_memo_save_allows_empty_title(store_path):
         await pilot.pause()
         assert len(lib.articles) == 1
         assert lib.articles[0].mode == "note"
-        assert lib.articles[0].group == "Personal notes"
+        assert lib.articles[0].group == "Ungrouped"
         assert lib.articles[0].title  # default timestamp title
 
     run(scenario)
@@ -215,6 +215,52 @@ def test_group_headers_expand_on_enter(store_path):
 
         rows = list(lib.query_one("#article-list").query("ListItem"))
         assert [type(item).__name__ for item in rows] == ["GroupHeader", "ArticleItem"]
+        assert lib.query_one("#article-list").index == 0
+
+    run(scenario)
+
+
+def test_group_header_label_separates_name_and_count(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "One", "Alpha.", group="Book 1")
+        header = next(
+            item
+            for item in lib.query_one("#article-list").query("ListItem")
+            if isinstance(item, GroupHeader)
+        )
+
+        assert str(header.children[0].renderable) == "- Book 1 · 1"
+
+    run(scenario)
+
+
+def test_collapsing_selected_group_keeps_editor_preview(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "One", "Alpha.", group="Book 1")
+        lib.load_article(lib.articles[0])
+        await pilot.pause()
+
+        lib.toggle_group("Book 1")
+        await pilot.pause()
+
+        assert lib.selected_article_id == lib.articles[0].article_id
+        assert lib.query_one("#article-list").index == 0
+        assert lib.query_one("#editor-title").value == "One"
+        assert lib.query_one("#editor-group").value == "Book 1"
+        assert lib.query_one("#article-body").text == "Alpha."
+
+    run(scenario)
+
+
+def test_list_labels_treat_user_brackets_as_plain_text(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "One [x]", "Alpha.", group="Book [1]")
+        rows = list(lib.query_one("#article-list").query("ListItem"))
+        header = next(item for item in rows if isinstance(item, GroupHeader))
+        article = next(item for item in rows if isinstance(item, ArticleItem))
+
+        assert str(header.children[0].renderable) == "- Book [1] · 1"
+        assert str(article._label.renderable).endswith("One [x]  ○○○")
 
     run(scenario)
 
@@ -229,10 +275,25 @@ def test_selected_row_shows_marker(store_path):
         markers = {}
         for item in lib.query_one("#article-list").query("ListItem"):
             if isinstance(item, ArticleItem):
-                first_line = str(item._label.renderable).splitlines()[0]
-                markers[item.article.title] = first_line
+                markers[item.article.title] = str(item._label.renderable)
         assert markers["One"].startswith("> ")
         assert markers["Two"].startswith("  ")
+
+    run(scenario)
+
+
+def test_article_row_shows_title_and_stars_on_one_line(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "One", "Alpha.")
+        item = next(
+            item
+            for item in lib.query_one("#article-list").query("ListItem")
+            if isinstance(item, ArticleItem)
+        )
+
+        label = str(item._label.renderable)
+        assert "\n" not in label
+        assert label.endswith("One  ○○○")
 
     run(scenario)
 
@@ -363,6 +424,47 @@ def test_ctrl_d_deletes_from_list(store_path):
     run(scenario)
 
 
+def test_ctrl_r_starts_practice(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "Drill", "Hello world.")
+        lib.selected_article_id = lib.articles[0].article_id
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert isinstance(app.screen, PracticeScreen)
+
+    run(scenario)
+
+
+def test_ctrl_t_toggles_mode_filter(store_path):
+    async def scenario(app, pilot):
+        lib = app.screen
+        assert lib.current_filter == "article"
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert lib.current_filter == "note"
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert lib.current_filter == "article"
+
+    run(scenario)
+
+
+def test_arming_delete_marks_the_row(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "Doomed", "Hello world.")
+        lib.selected_article_id = lib.articles[0].article_id
+        lib.handle_delete()  # arm
+        await pilot.pause()
+        item = next(
+            item
+            for item in lib.query_one("#article-list").query("ListItem")
+            if isinstance(item, ArticleItem)
+        )
+        assert str(item._label.renderable).startswith("!   ")
+
+    run(scenario)
+
+
 def test_start_requires_selection(store_path):
     async def scenario(app, pilot):
         lib = app.screen
@@ -422,7 +524,13 @@ def test_completing_article_awards_star_and_returns_on_keypress(store_path):
         assert "Good" in message_text(practice)
         assert ArticleStore(store_path).load_articles()[0].completed_count == 1
 
-        await pilot.press("space")
+        # An incidental key stays on the completion screen...
+        await pilot.press("x")
+        await pilot.pause()
+        assert isinstance(app.screen, PracticeScreen)
+
+        # ...only a deliberate enter/esc returns to the library.
+        await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, LibraryScreen)
         # star refresh propagated back to the library view

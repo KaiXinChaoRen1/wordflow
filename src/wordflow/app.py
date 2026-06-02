@@ -34,7 +34,9 @@ class GroupHeader(ListItem):
         self.group = group
         self.count = count
         marker = "-" if expanded else "+"
-        super().__init__(Label(Text.from_markup(f"[dim]{marker} {group} {count}[/dim]")))
+        super().__init__(
+            Label(Text.assemble((f"{marker} ", "dim"), (group, "dim"), (f" · {count}", "dim")))
+        )
 
 
 class ArticleItem(ListItem):
@@ -45,18 +47,23 @@ class ArticleItem(ListItem):
         self._label = Label(self._label_text(selected=False))
         super().__init__(self._label)
 
-    def _label_text(self, selected: bool) -> Text:
-        gold_star = "[gold1]★[/gold1]"
-        gray_star = "[dim]☆[/dim]"
-        stars = gold_star * self.article.completed_count + gray_star * (
-            3 - self.article.completed_count
-        )
+    def _label_text(self, selected: bool, armed: bool = False) -> Text:
+        done = "●" * self.article.completed_count
+        todo = "○" * (3 - self.article.completed_count)
         title = self.article.title or "(untitled)"
-        marker = ">" if selected else " "
-        return Text.from_markup(f"{marker}   {title}\n    {stars}")
+        # An armed (awaiting-confirm) delete outranks the selection marker so a
+        # glance at the row tells you what the next Del press will remove.
+        marker = "!" if armed else (">" if selected else " ")
+        return Text.assemble(
+            f"{marker}   ",
+            title,
+            "  ",
+            (done, "#a4884a"),
+            (todo, "dim"),
+        )
 
-    def set_selected(self, selected: bool) -> None:
-        self._label.update(self._label_text(selected))
+    def set_selected(self, selected: bool, armed: bool = False) -> None:
+        self._label.update(self._label_text(selected, armed))
 
 
 class ImportArticlesScreen(Screen[None]):
@@ -142,6 +149,7 @@ class PracticeScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="practice-root"):
             yield Static(self.article.title, id="practice-title")
+            yield Static("", id="practice-progress")
             with VerticalScroll(id="article-view"):
                 for index, sentence in enumerate(self.article.sentences):
                     yield Static(
@@ -176,8 +184,18 @@ class PracticeScreen(Screen[None]):
             return
 
         self.refresh_article_view()
+        self.refresh_progress()
         self.sync_input_value()
         self.set_message("")
+
+    def refresh_progress(self) -> None:
+        total = len(self.article.sentences)
+        progress = self.query_one("#practice-progress", Static)
+        if not total:
+            progress.update(Text(""))
+            return
+        current = min(self.sentence_index + 1, total)
+        progress.update(Text(f"{current} / {total}", "dim"))
 
     def sentence_widget_id(self, index: int) -> str:
         return f"sentence-{index}"
@@ -300,14 +318,13 @@ class PracticeScreen(Screen[None]):
         input_widget.cursor_position = len(input_widget.value)
         self.set_message("[step] word complete")
 
-    @on(Input.Submitted, "#word-input")
-    def handle_submit(self, event: Input.Submitted) -> None:
-        del event
-        input_widget = self.query_one("#word-input", Input)
-        input_widget.cursor_position = len(input_widget.value)
-
     def on_key(self, event) -> None:
         if not self.is_complete:
+            return
+        # Only deliberate keys leave the completion screen; a reflexive
+        # keystroke after finishing no longer drops you out before you can
+        # read the result.
+        if event.key not in ("r", "enter", "escape"):
             return
         event.stop()
         if event.key == "r":
@@ -338,7 +355,8 @@ class PracticeScreen(Screen[None]):
         input_widget = self.query_one("#word-input", Input)
         input_widget.value = ""
         input_widget.disabled = True
-        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  r repeat · any key back")
+        self.refresh_progress()
+        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  r repeat · esc/enter back")
 
         completed_article = self.store.complete_article(self.article.article_id)
         if completed_article is not None:
@@ -353,7 +371,9 @@ class LibraryScreen(Screen[None]):
     BINDINGS = [
         ("ctrl+n", "new_article", "New"),
         ("ctrl+s", "save", "Save"),
+        ("ctrl+r", "run", "Run"),
         ("ctrl+d", "delete", "Del"),
+        ("ctrl+t", "toggle_filter", "Mode"),
     ]
 
     CSS = """
@@ -385,7 +405,7 @@ class LibraryScreen(Screen[None]):
         border: none;
         background: #111316;
         color: #aeb4b9;
-        scrollbar-size-vertical: 0;
+        scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 0;
     }
 
@@ -522,14 +542,14 @@ class LibraryScreen(Screen[None]):
 
     #article-list > ListItem.is-selected,
     #article-list > ListItem.is-selected Label {
-        color: #d4d9dd;
+        color: #ebeef0;
         text-style: bold;
     }
 
     Footer {
         dock: bottom;
         background: #101113;
-        color: #575d62;
+        color: #6a7177;
     }
 
     Input, TextArea {
@@ -566,6 +586,7 @@ class LibraryScreen(Screen[None]):
         # Article armed for deletion, awaiting a confirming second Del press.
         self.pending_delete_id: Optional[str] = None
         self.expanded_groups: set[str] = set()
+        self.pending_highlight_group: Optional[str] = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="library-root"):
@@ -592,13 +613,13 @@ class LibraryScreen(Screen[None]):
                 yield TextArea("", id="article-body")
                 yield Static("", id="status")
         with Horizontal(id="action-row"):
-            yield Button("New A", id="action-new-article", classes="action-button")
-            yield Button("New M", id="action-new-memo", classes="action-button")
-            yield Button("Save", id="action-save", classes="action-button")
-            yield Button("Run", id="action-run", classes="action-button")
-            yield Button("Del", id="action-delete", classes="action-button")
-            yield Button("Config", id="action-settings", classes="action-button")
-            yield Button("Cancel", id="action-cancel-new", classes="action-button")
+            yield Button("+article", id="action-new-article", classes="action-button")
+            yield Button("+memo", id="action-new-memo", classes="action-button")
+            yield Button("save", id="action-save", classes="action-button")
+            yield Button("run", id="action-run", classes="action-button")
+            yield Button("del", id="action-delete", classes="action-button")
+            yield Button("config", id="action-settings", classes="action-button")
+            yield Button("cancel", id="action-cancel-new", classes="action-button")
 
     def on_mount(self) -> None:
         self.refresh_article_list()
@@ -608,17 +629,20 @@ class LibraryScreen(Screen[None]):
 
     def refresh_article_list(self, announce_status: bool = True) -> None:
         self.announce_on_reconcile = announce_status
+        self.run_worker(
+            self.rebuild_article_list(),
+            group="article-list",
+            exclusive=True,
+        )
+
+    async def rebuild_article_list(self) -> None:
         list_view = self.query_one("#article-list", ListView)
         list_view.index = None
-        list_view.clear()
-        self.call_after_refresh(self.populate_article_list)
-
-    def populate_article_list(self) -> None:
-        list_view = self.query_one("#article-list", ListView)
+        await list_view.clear()
         visible_items = self.visible_list_items()
         if visible_items:
-            list_view.extend(visible_items)
-        self.call_after_refresh(self.reconcile_article_selection)
+            await list_view.extend(visible_items)
+        self.reconcile_article_selection()
 
     def visible_list_items(self) -> List[ListItem]:
         items: List[ListItem] = []
@@ -635,17 +659,19 @@ class LibraryScreen(Screen[None]):
         announce = self.announce_on_reconcile
         self.announce_on_reconcile = True
         list_view = self.query_one("#article-list", ListView)
+        pending_group = self.pending_highlight_group
         if not self.filtered_articles():
+            self.pending_highlight_group = None
             self.selected_article_id = None
             list_view.index = None
             self.clear_editor(announce=announce)
             return
 
         if not self.selected_article_id:
-            list_view.index = None
             self.sync_article_list_selected_class()
             if not self.is_creating_new:
                 self.clear_editor(announce=announce)
+            self.apply_pending_or_clear(list_view, pending_group)
             return
 
         selected_index: Optional[int] = None
@@ -658,20 +684,53 @@ class LibraryScreen(Screen[None]):
                 break
 
         if selected_index is None:
-            self.selected_article_id = None
-            list_view.index = None
-            self.clear_editor(announce=announce)
+            if any(
+                article.article_id == self.selected_article_id
+                for article in self.filtered_articles()
+            ):
+                self.sync_article_list_selected_class()
+                self.apply_pending_or_clear(list_view, pending_group)
+            else:
+                self.apply_pending_or_clear(list_view, pending_group)
+                self.selected_article_id = None
+                self.clear_editor(announce=announce)
+            return
+
+        selected_item = list_view.children[selected_index]
+        if (
+            pending_group
+            and isinstance(selected_item, ArticleItem)
+            and (
+                selected_item.article.group != pending_group
+                or pending_group in self.expanded_groups
+            )
+            and self.apply_pending_or_clear(list_view, pending_group)
+        ):
             return
 
         list_view.index = selected_index
-        selected_item = list_view.children[selected_index]
         if isinstance(selected_item, ArticleItem):
             self.load_article(selected_item.article, announce=announce)
+
+    def highlight_group_header(self, list_view: ListView, group: Optional[str]) -> bool:
+        if not group:
+            return False
+        for index, item in enumerate(list_view.children):
+            if isinstance(item, GroupHeader) and item.group == group:
+                list_view.index = index
+                return True
+        return False
+
+    def apply_pending_or_clear(self, list_view: ListView, group: Optional[str]) -> bool:
+        if self.highlight_group_header(list_view, group):
+            self.pending_highlight_group = None
+            return True
+        list_view.index = None
+        return False
 
     def load_article(self, article: Article, announce: bool = True) -> None:
         self.is_creating_new = False
         self.pending_delete_id = None
-        self.expanded_groups.add(article.group)
         self.selected_article_id = article.article_id
         self.current_mode = article.mode
         self.query_one("#editor-title", Input).value = article.title
@@ -688,7 +747,7 @@ class LibraryScreen(Screen[None]):
         self.selected_article_id = None
         if not self.is_creating_new:
             self.current_mode = self.current_filter
-        group = self.default_group_for_mode(self.current_mode)
+        group = DEFAULT_GROUP
         self.query_one("#editor-title", Input).value = ""
         self.query_one("#editor-group", Input).value = group
         self.query_one("#article-body", TextArea).text = ""
@@ -701,18 +760,17 @@ class LibraryScreen(Screen[None]):
     def sync_article_list_selected_class(self) -> None:
         list_view = self.query_one("#article-list", ListView)
         selected_id = self.selected_article_id
+        armed_id = self.pending_delete_id
         for item in list_view.query("ListItem"):
             if not isinstance(item, ArticleItem):
                 continue
             selected = bool(selected_id and item.article.article_id == selected_id)
+            armed = bool(armed_id and item.article.article_id == armed_id)
             item.set_class(selected, "is-selected")
-            item.set_selected(selected)
+            item.set_selected(selected, armed)
 
     def focus_editor(self) -> None:
         self.query_one("#editor-title", Input).focus()
-
-    def default_group_for_mode(self, mode: ContentMode) -> str:
-        return "Personal notes" if mode == "note" else DEFAULT_GROUP
 
     def set_status(self, text: str) -> None:
         self.query_one("#status", Static).update(text)
@@ -745,16 +803,12 @@ class LibraryScreen(Screen[None]):
         article_button = self.query_one("#filter-article", Static)
         note_button = self.query_one("#filter-note", Static)
 
-        for button, active in (
-            (article_button, self.current_filter == "article"),
-            (note_button, self.current_filter == "note"),
+        for button, label, active in (
+            (article_button, "article", self.current_filter == "article"),
+            (note_button, "memo", self.current_filter == "note"),
         ):
-            label = "article" if button.id == "filter-article" else "memo"
             button.update(f"> {label}" if active else f"  {label}")
-            if active:
-                button.add_class("-active")
-            else:
-                button.remove_class("-active")
+            button.set_class(active, "-active")
 
     def sync_action_controls(self) -> None:
         cancel_button = self.query_one("#action-cancel-new", Button)
@@ -802,7 +856,7 @@ class LibraryScreen(Screen[None]):
         self.current_filter = mode
         self.selected_article_id = None
         new_title = self.store.default_note_title() if mode == "note" else ""
-        new_group = self.default_group_for_mode(mode)
+        new_group = DEFAULT_GROUP
         self.query_one("#editor-title", Input).value = new_title
         self.query_one("#editor-group", Input).value = new_group
         self.query_one("#article-body", TextArea).text = ""
@@ -817,6 +871,10 @@ class LibraryScreen(Screen[None]):
     def handle_highlight(self, event: ListView.Highlighted) -> None:
         # Moving through the list with the arrow keys previews each item in
         # the editor so it can be read or edited.
+        # Async list rebuilds can leave a stale Highlighted event pointing at
+        # an item that has already been removed.
+        if event.item not in self.query_one("#article-list", ListView).children:
+            return
         self.load_article_from_item(event.item)
 
     @on(ListView.Selected, "#article-list")
@@ -831,18 +889,9 @@ class LibraryScreen(Screen[None]):
         self.handle_start()
 
     def toggle_group(self, group: str) -> None:
+        self.pending_highlight_group = group
         if group in self.expanded_groups:
             self.expanded_groups.remove(group)
-            selected = next(
-                (
-                    article
-                    for article in self.articles
-                    if article.article_id == self.selected_article_id
-                ),
-                None,
-            )
-            if selected is not None and selected.group == group:
-                self.clear_editor(announce=False)
         else:
             self.expanded_groups.add(group)
         self.refresh_article_list(announce_status=False)
@@ -897,6 +946,12 @@ class LibraryScreen(Screen[None]):
 
     def action_save(self) -> None:
         self.handle_save()
+
+    def action_run(self) -> None:
+        self.handle_start()
+
+    def action_toggle_filter(self) -> None:
+        self.set_filter("note" if self.current_filter == "article" else "article")
 
     def action_delete(self) -> None:
         self.handle_delete()
@@ -968,6 +1023,7 @@ class LibraryScreen(Screen[None]):
 
         if self.pending_delete_id != self.selected_article_id:
             self.pending_delete_id = self.selected_article_id
+            self.sync_article_list_selected_class()
             self.set_status("[confirm] press Del again")
             return
 
@@ -1010,7 +1066,7 @@ class WordflowApp(App[None]):
     Footer {
         dock: bottom;
         background: #101113;
-        color: #575d62;
+        color: #6a7177;
     }
 
     Screen {
@@ -1026,6 +1082,12 @@ class WordflowApp(App[None]):
     #practice-title {
         color: #cfd4d8;
         text-style: bold;
+        margin-bottom: 0;
+    }
+
+    #practice-progress {
+        height: 1;
+        color: #5f666c;
         margin-bottom: 0;
     }
 
