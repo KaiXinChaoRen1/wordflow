@@ -771,7 +771,7 @@ class LibraryScreen(Screen[None]):
             self.query_one("#status", Static).update("[missing] select an item")
             return
 
-        if not article.sentences:
+        if not any(extract_words(sentence) for sentence in article.sentences):
             self.query_one("#status", Static).update("[invalid] empty")
             return
 
