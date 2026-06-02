@@ -116,7 +116,7 @@ class PracticeScreen(Screen[None]):
             extract_words(self.article.sentences[0]) if self.article.sentences else []
         )
         self.current_prefix = ""
-        self.syncing_input = False
+        self.pending_sync_value: Optional[str] = None
         self.is_complete = False
 
     def compose(self) -> ComposeResult:
@@ -212,14 +212,23 @@ class PracticeScreen(Screen[None]):
 
     def sync_input_value(self) -> None:
         input_widget = self.query_one("#word-input", Input)
-        self.syncing_input = True
-        input_widget.value = self.build_input_value()
-        input_widget.cursor_position = len(input_widget.value)
-        self.syncing_input = False
+        value = self.build_input_value()
+        # Setting .value posts an Input.Changed *asynchronously*, so a boolean
+        # flag reset here would already be cleared when that event arrives.
+        # Instead remember the value we wrote (only when it actually changes,
+        # since an equal assignment posts no event) and skip it on arrival.
+        if input_widget.value != value:
+            self.pending_sync_value = value
+        input_widget.value = value
+        input_widget.cursor_position = len(value)
 
     @on(Input.Changed, "#word-input")
     def handle_input_changed(self, event: Input.Changed) -> None:
-        if self.is_complete or self.syncing_input or not self.current_words:
+        if self.is_complete or not self.current_words:
+            return
+
+        if event.value == self.pending_sync_value:
+            self.pending_sync_value = None
             return
 
         input_widget = self.query_one("#word-input", Input)
