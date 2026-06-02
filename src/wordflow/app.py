@@ -694,9 +694,17 @@ class LibraryScreen(Screen[None]):
         self.refresh_article_list()
         self.focus_editor()
 
+    @on(ListView.Highlighted, "#article-list")
+    def handle_highlight(self, event: ListView.Highlighted) -> None:
+        # Moving through the list with the arrow keys previews each item in
+        # the editor so it can be read or edited.
+        self.load_article_from_item(event.item)
+
     @on(ListView.Selected, "#article-list")
     def handle_select(self, event: ListView.Selected) -> None:
+        # Enter (or click) on a list item jumps straight into practice.
         self.load_article_from_item(event.item)
+        self.handle_start()
 
     def load_article_from_item(self, item: Optional[ListItem]) -> None:
         if not isinstance(item, ArticleItem):

@@ -189,6 +189,32 @@ def test_word_less_content_is_rejected_without_awarding_a_star(store_path):
     run(scenario)
 
 
+def test_arrow_keys_preview_and_enter_starts_practice(store_path):
+    async def scenario(app, pilot):
+        await make_article(pilot, app, "One", "Alpha beta.")
+        lib = await make_article(pilot, app, "Two", "Gamma delta.")
+
+        # After saving, "Two" is the highlighted row; move up to "One".
+        list_view = lib.query_one("#article-list")
+        list_view.focus()
+        await pilot.pause()
+
+        await pilot.press("up")
+        await pilot.pause()
+        assert lib.query_one("#editor-title").value == "One"  # previewed, not practiced
+        assert isinstance(app.screen, LibraryScreen)
+
+        await pilot.press("down")
+        await pilot.pause()
+        assert lib.query_one("#editor-title").value == "Two"
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PracticeScreen)
+
+    run(scenario)
+
+
 def test_start_requires_selection(store_path):
     async def scenario(app, pilot):
         lib = app.screen
