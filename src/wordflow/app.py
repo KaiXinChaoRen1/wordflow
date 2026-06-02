@@ -498,6 +498,9 @@ class LibraryScreen(Screen[None]):
         self.is_creating_new = False
         self.previous_selected_article_id: Optional[str] = None
         self.previous_filter: ContentMode = "article"
+        # When False, the next (deferred) reconcile keeps the status the
+        # current action just set instead of replacing it with [ready]/[idle].
+        self.announce_on_reconcile = True
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="library-root"):
@@ -537,7 +540,8 @@ class LibraryScreen(Screen[None]):
         self.sync_action_controls()
         self.focus_editor()
 
-    def refresh_article_list(self) -> None:
+    def refresh_article_list(self, announce_status: bool = True) -> None:
+        self.announce_on_reconcile = announce_status
         list_view = self.query_one("#article-list", ListView)
         list_view.clear()
         visible_articles = self.filtered_articles()
@@ -546,20 +550,22 @@ class LibraryScreen(Screen[None]):
         self.call_after_refresh(self.reconcile_article_selection)
 
     def reconcile_article_selection(self) -> None:
+        announce = self.announce_on_reconcile
+        self.announce_on_reconcile = True
         list_view = self.query_one("#article-list", ListView)
         visible_articles = self.filtered_articles()
 
         if not visible_articles:
             self.selected_article_id = None
             list_view.index = None
-            self.clear_editor()
+            self.clear_editor(announce=announce)
             return
 
         if not self.selected_article_id:
             list_view.index = None
             self.sync_article_list_selected_class()
             if not self.is_creating_new:
-                self.clear_editor()
+                self.clear_editor(announce=announce)
             return
 
         selected_index: Optional[int] = None
@@ -571,13 +577,13 @@ class LibraryScreen(Screen[None]):
         if selected_index is None:
             self.selected_article_id = None
             list_view.index = None
-            self.clear_editor()
+            self.clear_editor(announce=announce)
             return
 
         list_view.index = selected_index
-        self.load_article(visible_articles[selected_index])
+        self.load_article(visible_articles[selected_index], announce=announce)
 
-    def load_article(self, article: Article) -> None:
+    def load_article(self, article: Article, announce: bool = True) -> None:
         self.is_creating_new = False
         self.selected_article_id = article.article_id
         self.current_mode = article.mode
@@ -585,9 +591,10 @@ class LibraryScreen(Screen[None]):
         self.query_one("#article-body", TextArea).text = article.body
         self.sync_article_list_selected_class()
         self.sync_action_controls()
-        self.query_one("#status", Static).update(f"[ready] {article.title}")
+        if announce:
+            self.query_one("#status", Static).update(f"[ready] {article.title}")
 
-    def clear_editor(self) -> None:
+    def clear_editor(self, announce: bool = True) -> None:
         self.selected_article_id = None
         if not self.is_creating_new:
             self.current_mode = self.current_filter
@@ -595,7 +602,8 @@ class LibraryScreen(Screen[None]):
         self.query_one("#article-body", TextArea).text = ""
         self.sync_article_list_selected_class()
         self.sync_action_controls()
-        self.query_one("#status", Static).update("[idle] select or create")
+        if announce:
+            self.query_one("#status", Static).update("[idle] select or create")
 
     def sync_article_list_selected_class(self) -> None:
         list_view = self.query_one("#article-list", ListView)
@@ -758,7 +766,7 @@ class LibraryScreen(Screen[None]):
         if saved_article is not None:
             self.current_mode = saved_article.mode
             self.query_one("#editor-title", Input).value = saved_article.title
-        self.refresh_article_list()
+        self.refresh_article_list(announce_status=False)
         self.query_one("#status", Static).update("[saved]")
 
     def handle_delete(self) -> None:
@@ -768,7 +776,7 @@ class LibraryScreen(Screen[None]):
 
         self.articles = self.store.delete_article(self.articles, self.selected_article_id)
         self.selected_article_id = None
-        self.refresh_article_list()
+        self.refresh_article_list(announce_status=False)
         self.query_one("#status", Static).update("[removed] item")
 
     def handle_start(self) -> None:
