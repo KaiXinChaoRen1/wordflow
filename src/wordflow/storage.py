@@ -63,16 +63,21 @@ class ArticleStore:
         try:
             with self.path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except (json.JSONDecodeError, OSError):
-            return []
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"invalid JSON in article data {self.path} "
+                f"(line {error.lineno}, column {error.colno})"
+            ) from error
 
         if not isinstance(payload, list):
-            return []
+            raise ValueError(f"article data must be a JSON array: {self.path}")
 
         articles = []
-        for item in payload:
+        for index, item in enumerate(payload):
             if not isinstance(item, dict):
-                continue
+                raise ValueError(
+                    f"article data item {index} must be an object: {self.path}"
+                )
             mode = self.normalize_mode(str(item.get("mode", "article")))
             article_id = str(item.get("article_id") or uuid4())
             title = str(item.get("title", "")).strip()

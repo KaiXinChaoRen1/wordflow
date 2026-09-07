@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from wordflow.storage import Article, ArticleStore
 
 
@@ -95,25 +97,25 @@ def test_load_articles_defaults_legacy_items_to_article_mode(tmp_path):
     assert articles[0].sentences == ["One day it rained.", "We stayed in!"]
 
 
-def test_load_articles_handles_invalid_json_gracefully(tmp_path):
+def test_load_articles_reports_invalid_json_with_path(tmp_path):
     path = tmp_path / "articles.json"
     path.write_text("{bad json", encoding="utf-8")
 
     store = ArticleStore(path)
-    articles = store.load_articles()
 
-    assert articles == []
+    with pytest.raises(ValueError, match=r"invalid JSON.*articles\.json.*line 1"):
+        store.load_articles()
 
 
-def test_load_articles_ignores_non_list_payload_and_bad_items(tmp_path):
+def test_load_articles_rejects_non_list_payload_and_bad_items(tmp_path):
     path = tmp_path / "articles.json"
     path.write_text(json.dumps({"not": "a list"}), encoding="utf-8")
-    assert ArticleStore(path).load_articles() == []
+    with pytest.raises(ValueError, match="must be a JSON array"):
+        ArticleStore(path).load_articles()
 
     path.write_text(json.dumps(["string", 5, {"title": "ok", "body": "Hi."}]), encoding="utf-8")
-    articles = ArticleStore(path).load_articles()
-    assert len(articles) == 1
-    assert articles[0].title == "ok"
+    with pytest.raises(ValueError, match="item 0 must be an object"):
+        ArticleStore(path).load_articles()
 
 
 def test_load_articles_normalizes_unknown_mode_to_article(tmp_path):

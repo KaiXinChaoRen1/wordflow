@@ -11,12 +11,16 @@ WORD_RE = re.compile(r"[A-Za-z]+(?:['-][A-Za-z]+)*")
 
 def split_sentences(text: str) -> List[str]:
     """Split raw article text into readable sentences."""
-    normalized = re.sub(r"\s+", " ", text.replace("\r", " ")).strip()
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not normalized:
         return []
 
     parts = SENTENCE_BREAK_RE.split(normalized)
-    return [part.strip() for part in parts if part.strip()]
+    return [
+        re.sub(r"[^\S\n]+", " ", part).strip()
+        for part in parts
+        if part.strip()
+    ]
 
 
 def split_lines(text: str) -> List[str]:

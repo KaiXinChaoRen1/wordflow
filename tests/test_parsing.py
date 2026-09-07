@@ -31,6 +31,13 @@ def test_split_sentences_normalizes_carriage_returns():
     assert split_sentences("Line one.\r\nLine two.") == ["Line one.", "Line two."]
 
 
+def test_split_sentences_uses_newlines_without_terminal_punctuation():
+    assert split_sentences("A short heading\nFirst sentence.") == [
+        "A short heading",
+        "First sentence.",
+    ]
+
+
 def test_extract_words_keeps_apostrophes_and_hyphens():
     sentence = "Don't forget the well-known writer."
     assert extract_words(sentence) == ["Don't", "forget", "the", "well-known", "writer"]
