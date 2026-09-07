@@ -514,7 +514,7 @@ def test_wrong_character_shows_hint_and_reverts(store_path):
     run(scenario)
 
 
-def test_completing_article_awards_star_and_returns_on_keypress(store_path):
+def test_completing_article_awards_star_and_returns_on_any_key(store_path):
     async def scenario(app, pilot):
         lib, practice = await start_practice(pilot, app, "Hi there.")
         for char in "Hithere":
@@ -522,15 +522,11 @@ def test_completing_article_awards_star_and_returns_on_keypress(store_path):
         await pilot.pause()
         assert practice.is_complete
         assert "Good" in message_text(practice)
+        assert "any key back" in message_text(practice)
         assert ArticleStore(store_path).load_articles()[0].completed_count == 1
 
-        # An incidental key stays on the completion screen...
+        # The next key returns to the quiet main view.
         await pilot.press("x")
-        await pilot.pause()
-        assert isinstance(app.screen, PracticeScreen)
-
-        # ...only a deliberate enter/esc returns to the library.
-        await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, LibraryScreen)
         # star refresh propagated back to the library view
@@ -583,5 +579,94 @@ def test_case_insensitive_matching(store_path):
         await pilot.press("h", "i")  # lower-case input for "Hi"
         await pilot.pause()
         assert practice.word_index == 1
+
+    run(scenario)
+
+
+def test_long_title_can_scroll_horizontally(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "Long title " * 12, "Alpha.")
+        view = lib.query_one("#article-list")
+        assert view.show_horizontal_scrollbar
+        assert view.max_scroll_x > 0
+        view.scroll_to(x=view.max_scroll_x, animate=False, immediate=True)
+        await pilot.pause()
+        assert view.scroll_x > 0
+
+    run(scenario)
+
+
+def test_preview_sentence_breaks_and_completion(store_path):
+    async def scenario(app, pilot):
+        original = "First sentence. Second sentence!"
+        lib = await make_article(pilot, app, "One", original)
+        lib.store.complete_article(lib.articles[0].article_id)
+        lib.refresh_articles_from_store()
+        await pilot.pause()
+        assert str(lib.query_one("#editor-completion").renderable) == "●○○"
+        assert lib.query_one("#article-body").text == "First sentence.\nSecond sentence!"
+        assert lib.query_one("#article-body").soft_wrap
+        assert not lib.editor_is_dirty()
+        lib.query_one("#editor-title").value = "Renamed"
+        lib.handle_save()
+        await pilot.pause()
+        assert lib.store.load_articles()[0].body == original
+        lib.start_new_item("article")
+        await pilot.pause()
+        assert str(lib.query_one("#editor-completion").renderable) == ""
+
+    run(scenario)
+
+
+@pytest.mark.parametrize("values", [("H", "He", "Hel"), ("H", "Hx", "He", "H", "He", "Hel")])
+def test_burst_input_does_not_replay_programmatic_changes(store_path, monkeypatch, values):
+    async def scenario(app, pilot):
+        _, practice = await start_practice(pilot, app, "Hello world.")
+        sync = practice.sync_input_value
+        sync_calls = 0
+
+        def counted_sync():
+            nonlocal sync_calls
+            sync_calls += 1
+            if sync_calls > 20:
+                raise RuntimeError("Input.Changed feedback loop")
+            sync()
+
+        monkeypatch.setattr(practice, "sync_input_value", counted_sync)
+        widget = practice.query_one("#word-input")
+        for value in values:
+            widget.value = value
+        await pilot.pause()
+        assert widget.value == "Hel"
+        assert practice.current_prefix == "Hel"
+        await pilot.press("l", "o")
+        assert practice.word_index == 1
+
+    run(scenario)
+
+
+def test_typing_refreshes_only_current_sentence(store_path, monkeypatch):
+    async def scenario(app, pilot):
+        _, practice = await start_practice(pilot, app, "Hi there. Next sentence.")
+        untouched = practice.query_one("#sentence-1")
+        updates = []
+        scrolls = []
+        original_update = untouched.update
+
+        def record_update(value):
+            updates.append(value)
+            original_update(value)
+
+        monkeypatch.setattr(untouched, "update", record_update)
+        monkeypatch.setattr(practice, "center_current_sentence", scrolls.append)
+        await pilot.press("H", "backspace", "H", "i")
+        assert not updates
+        assert not scrolls
+        await pilot.press(*"there")
+        await pilot.pause()
+        assert practice.sentence_index == 1
+        assert untouched.has_class("article-sentence--active")
+        assert not practice.query_one("#sentence-0").has_class("article-sentence--active")
+        assert scrolls == [untouched]
 
     run(scenario)

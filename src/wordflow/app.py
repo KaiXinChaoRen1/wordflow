@@ -27,6 +27,13 @@ from .parsing import extract_words
 from .storage import DEFAULT_GROUP, Article, ArticleStore, ContentMode
 
 
+def completion_marks(article: Article) -> Text:
+    return Text.assemble(
+        ("●" * article.completed_count, "#a4884a"),
+        ("○" * (3 - article.completed_count), "dim"),
+    )
+
+
 class GroupHeader(ListItem):
     """Quiet section label for grouped article rows."""
 
@@ -48,8 +55,6 @@ class ArticleItem(ListItem):
         super().__init__(self._label)
 
     def _label_text(self, selected: bool, armed: bool = False) -> Text:
-        done = "●" * self.article.completed_count
-        todo = "○" * (3 - self.article.completed_count)
         title = self.article.title or "(untitled)"
         # An armed (awaiting-confirm) delete outranks the selection marker so a
         # glance at the row tells you what the next Del press will remove.
@@ -58,8 +63,8 @@ class ArticleItem(ListItem):
             f"{marker}   ",
             title,
             "  ",
-            (done, "#a4884a"),
-            (todo, "dim"),
+            completion_marks(self.article),
+            no_wrap=True,
         )
 
     def set_selected(self, selected: bool, armed: bool = False) -> None:
@@ -143,7 +148,7 @@ class PracticeScreen(Screen[None]):
             extract_words(self.article.sentences[0]) if self.article.sentences else []
         )
         self.current_prefix = ""
-        self.pending_sync_value: Optional[str] = None
+        self.active_sentence_index: Optional[int] = None
         self.is_complete = False
 
     def compose(self) -> ComposeResult:
@@ -204,17 +209,19 @@ class PracticeScreen(Screen[None]):
         self.query_one("#practice-message", Static).update(text)
 
     def refresh_article_view(self) -> None:
-        for index, sentence in enumerate(self.article.sentences):
-            widget = self.query_one(f"#{self.sentence_widget_id(index)}", Static)
-            if index == self.sentence_index:
-                widget.update(self.render_sentence(sentence))
-                widget.add_class("article-sentence--active")
-            else:
-                widget.update(sentence)
-                widget.remove_class("article-sentence--active")
+        previous_index = self.active_sentence_index
+        changed_sentence = previous_index != self.sentence_index
+        if changed_sentence and previous_index is not None:
+            previous = self.query_one(f"#{self.sentence_widget_id(previous_index)}", Static)
+            previous.update(Text(self.article.sentences[previous_index]))
+            previous.remove_class("article-sentence--active")
 
         current_widget = self.query_one(f"#{self.sentence_widget_id(self.sentence_index)}", Static)
-        self.call_after_refresh(self.center_current_sentence, current_widget)
+        current_widget.update(self.render_sentence(self.article.sentences[self.sentence_index]))
+        current_widget.add_class("article-sentence--active")
+        self.active_sentence_index = self.sentence_index
+        if changed_sentence:
+            self.call_after_refresh(self.center_current_sentence, current_widget)
 
     def center_current_sentence(self, current_widget: Static) -> None:
         self.query_one("#article-view", VerticalScroll).scroll_to_widget(
@@ -254,22 +261,15 @@ class PracticeScreen(Screen[None]):
     def sync_input_value(self) -> None:
         input_widget = self.query_one("#word-input", Input)
         value = self.build_input_value()
-        # Setting .value posts an Input.Changed *asynchronously*, so a boolean
-        # flag reset here would already be cleared when that event arrives.
-        # Instead remember the value we wrote (only when it actually changes,
-        # since an equal assignment posts no event) and skip it on arrival.
-        if input_widget.value != value:
-            self.pending_sync_value = value
-        input_widget.value = value
+        # Programmatic corrections must not re-enter the input event queue.
+        # A single remembered value cannot identify multiple queued changes.
+        with input_widget.prevent(Input.Changed):
+            input_widget.value = value
         input_widget.cursor_position = len(value)
 
     @on(Input.Changed, "#word-input")
     def handle_input_changed(self, event: Input.Changed) -> None:
         if self.is_complete or not self.current_words:
-            return
-
-        if event.value == self.pending_sync_value:
-            self.pending_sync_value = None
             return
 
         input_widget = self.query_one("#word-input", Input)
@@ -288,6 +288,7 @@ class PracticeScreen(Screen[None]):
         if not guess:
             self.current_prefix = ""
             self.sync_input_value()
+            self.refresh_article_view()
             self.set_message("")
             return
 
@@ -321,11 +322,6 @@ class PracticeScreen(Screen[None]):
     def on_key(self, event) -> None:
         if not self.is_complete:
             return
-        # Only deliberate keys leave the completion screen; a reflexive
-        # keystroke after finishing no longer drops you out before you can
-        # read the result.
-        if event.key not in ("r", "enter", "escape"):
-            return
         event.stop()
         if event.key == "r":
             self.restart_practice()
@@ -334,10 +330,10 @@ class PracticeScreen(Screen[None]):
 
     def restart_practice(self) -> None:
         self.is_complete = False
+        self.active_sentence_index = None
         self.sentence_index = 0
         self.word_index = 0
         self.current_prefix = ""
-        self.pending_sync_value = None
         input_widget = self.query_one("#word-input", Input)
         input_widget.disabled = False
         self.refresh_sentence()
@@ -353,10 +349,11 @@ class PracticeScreen(Screen[None]):
             widget.update(sentence)
             widget.remove_class("article-sentence--active")
         input_widget = self.query_one("#word-input", Input)
-        input_widget.value = ""
+        with input_widget.prevent(Input.Changed):
+            input_widget.value = ""
         input_widget.disabled = True
         self.refresh_progress()
-        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  r repeat · esc/enter back")
+        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  r repeat · any key back")
 
         completed_article = self.store.complete_article(self.article.article_id)
         if completed_article is not None:
@@ -406,7 +403,8 @@ class LibraryScreen(Screen[None]):
         background: #111316;
         color: #aeb4b9;
         scrollbar-size-vertical: 1;
-        scrollbar-size-horizontal: 0;
+        overflow-x: auto;
+        scrollbar-size-horizontal: 1;
     }
 
     #filter-switch {
@@ -451,6 +449,16 @@ class LibraryScreen(Screen[None]):
 
     #editor-card {
         padding: 1;
+    }
+
+    #editor-heading {
+        height: 2;
+    }
+
+    #editor-completion {
+        width: 4;
+        height: 1;
+        margin-left: 1;
     }
 
     #editor-title {
@@ -518,11 +526,15 @@ class LibraryScreen(Screen[None]):
     }
 
     #article-list > ListItem {
+        width: auto;
+        min-width: 100%;
+        height: 1;
         padding: 0 1;
         background: transparent;
     }
 
     #article-list > ListItem Label {
+        width: auto;
         background: transparent;
         color: #aeb4b9;
     }
@@ -609,7 +621,9 @@ class LibraryScreen(Screen[None]):
                     yield ListView(id="article-list")
             with Vertical(id="editor-card"):
                 yield Input(placeholder="group", id="editor-group")
-                yield Input(placeholder="name", id="editor-title")
+                with Horizontal(id="editor-heading"):
+                    yield Input(placeholder="name", id="editor-title")
+                    yield Static("", id="editor-completion")
                 yield TextArea("", id="article-body")
                 yield Static("", id="status")
         with Horizontal(id="action-row"):
@@ -735,8 +749,10 @@ class LibraryScreen(Screen[None]):
         self.current_mode = article.mode
         self.query_one("#editor-title", Input).value = article.title
         self.query_one("#editor-group", Input).value = article.group
-        self.query_one("#article-body", TextArea).text = article.body
-        self.mark_editor_saved(article.title, article.group, article.body)
+        body = "\n".join(article.sentences) if article.mode == "article" else article.body
+        self.query_one("#article-body", TextArea).text = body
+        self.query_one("#editor-completion", Static).update(completion_marks(article))
+        self.mark_editor_saved(article.title, article.group, body)
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
@@ -750,6 +766,7 @@ class LibraryScreen(Screen[None]):
         group = DEFAULT_GROUP
         self.query_one("#editor-title", Input).value = ""
         self.query_one("#editor-group", Input).value = group
+        self.query_one("#editor-completion", Static).update("")
         self.query_one("#article-body", TextArea).text = ""
         self.mark_editor_saved("", group, "")
         self.sync_article_list_selected_class()
@@ -859,6 +876,7 @@ class LibraryScreen(Screen[None]):
         new_group = DEFAULT_GROUP
         self.query_one("#editor-title", Input).value = new_title
         self.query_one("#editor-group", Input).value = new_group
+        self.query_one("#editor-completion", Static).update("")
         self.query_one("#article-body", TextArea).text = ""
         self.mark_editor_saved(new_title, new_group, "")
         self.set_status("[new] edit then save")
@@ -986,6 +1004,14 @@ class LibraryScreen(Screen[None]):
         if self.current_mode == "article" and not title:
             self.set_status("[missing] name")
             return
+
+        # Display-only sentence breaks must not rewrite the stored original.
+        if body == self.loaded_body:
+            original = next(
+                (a for a in self.articles if a.article_id == self.selected_article_id), None
+            )
+            if original is not None:
+                body = original.body
 
         target_article_id = self.selected_article_id or str(uuid4())
         updated_articles = self.store.upsert_article(
