@@ -1,0 +1,18 @@
+[
+  {
+    "article_id": "sample-small-steps",
+    "title": "Small steps",
+    "body": "A short break can be a chance to learn. Write one sentence at a time. Small steps make practice easier.",
+    "mode": "article",
+    "group": "Getting started",
+    "completed_count": 0
+  },
+  {
+    "article_id": "sample-everyday-writing",
+    "title": "Everyday writing",
+    "body": "Could you share a short update?\nI will check the details this afternoon.\nThank you for your help.",
+    "mode": "note",
+    "group": "Getting started",
+    "completed_count": 0
+  }
+]

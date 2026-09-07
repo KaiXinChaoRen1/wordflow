@@ -2,3 +2,11 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# Local data and generated build artifacts
+.wordflow/
+.spelllane/
+.venv-build-*/
+build/
+dist/
+*.egg-info/

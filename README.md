@@ -1,153 +1,124 @@
-# Wordflow
+# Wordflow — English typing practice in your terminal
 
-`Wordflow` 是一个基于 `Python + Textual` 的终端英语拼写训练器。
+**Practice English spelling with your own text, one word at a time.**
 
-## 项目愿景
+Wordflow is a quiet, offline terminal app for short practice sessions during a work break. Paste a paragraph you want to learn, type along with the highlighted words, and repeat whenever you have a few minutes.
 
-我们对这个项目的期待很明确：  
-未来英语能力不只是“会说”，更是“会写”。而在今天，“写”已经越来越不是靠纸笔，而是靠键盘输入。
+No account, browser, timers, or leaderboards. Your articles and progress stay on your computer.
 
-`Wordflow` 想做的是一个小而美、低干扰、可长期使用的键盘英语训练工具：
+[中文说明](README.zh-CN.md) · [Get started](#get-started) · [Report a bug](https://github.com/KaiXinChaoRen1/wordflow/issues/new?template=bug_report.md)
 
-- 摸鱼场景可用：界面低调，远看像普通终端工作界面
-- 拼写练习可持续：用真实内容反复训练，而不是一次性刷题
-- 反应能力可锻炼：按单词逐字推进，强化拼写与键盘反应
+![Wordflow practice screen showing the current word and typed letters](docs/images/practice.svg)
 
-它不追求功能堆砌，只追求稳定、顺手、长期可用。
+## Why Wordflow?
 
-## 当前功能
+If you spend your day at a keyboard and want to get more comfortable typing English, Wordflow gives you a small place to practice alongside your usual tools. Bring sentences from your study notes, everyday writing, or an article you are reading.
 
-- **双内容模式**
-  - `Article`：按句子切分后练习
-  - `Memo`：按行切分后练习
-- **主界面布局**
-  - 左侧：内容列表（支持 `article / memo` 过滤）
-  - 右侧：分组、标题与正文编辑、状态提示
-  - 底部：固定动作栏（`+article / +memo / save / run / del / config / cancel`）
-- **键盘快捷键**
-  - `Ctrl+N` 新建、`Ctrl+S` 保存、`Ctrl+R` 开始练习
-  - `Ctrl+D` 删除（二次确认，待删行以 `!` 标记）、`Ctrl+T` 切换 article / memo
-- **练习模式**
-  - 按当前单词逐字输入
-  - 空格自动处理
-  - 已完成单词、句子进度（`n / total`）实时反馈
-  - 完成后 `r` 重练、`Esc` / `Enter` 返回（不会因误触退出）
-- **导入/导出思路（轻实现）**
-  - 在 `Config` 中查看当前数据文件路径
-  - 直接编辑该 JSON 文件即可导入或替换内容
+- **Practice useful words.** Use your own text instead of a fixed word list.
+- **Get feedback as you type.** Correct letters advance the highlight; a wrong letter shows a hint and lets you try again. Matching is case-insensitive.
+- **Keep a quiet workspace.** A restrained terminal interface, keyboard shortcuts, and no sound.
+- **Build a repeatable habit.** Finish a passage, see `Good`, then press `r` to repeat. Three completion dots track up to three finished runs per item.
+- **Own your data.** Plain local JSON, with no account, cloud sync, or telemetry in the app.
 
-## 为什么这样设计
+This is guided copy-typing and spelling practice. The source text stays visible; there is no WPM scoring, pronunciation training, or vocabulary scheduling.
 
-`Wordflow` 优先服务的是“真实办公环境下的长期训练”：
+## Get started
 
-- 打开快、干扰低，不需要复杂准备
-- 数据结构直接、可控，不绑平台
-- 行为可预期，宁可简化功能，也不引入复杂错误
+You need **Python 3.9+**, Git, and a terminal. The commands below install this repository in an isolated virtual environment. An internet connection is needed to install dependencies; practice works offline afterward.
 
-## 安装与运行
+### macOS / Linux
 
 ```bash
-cd /Users/lwq/workspace/spelllane
-python3 -m pip install --user .
+git clone https://github.com/KaiXinChaoRen1/wordflow.git
+cd wordflow
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
 wordflow
 ```
 
-本地开发可直接运行：
+### Windows (PowerShell)
 
-```bash
-cd /Users/lwq/workspace/spelllane
-./run-dev.sh
+```powershell
+git clone https://github.com/KaiXinChaoRen1/wordflow.git
+cd wordflow
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\wordflow.exe
 ```
 
-## 数据存储
+For later sessions, run `.venv/bin/wordflow` on macOS/Linux or `.\.venv\Scripts\wordflow.exe` on Windows from the repository folder. Windows does not require activating the environment or changing PowerShell's execution policy.
 
-默认数据路径：
+### Your first practice session
+
+1. Choose `+article` or press `Ctrl+N`.
+2. Enter a title and paste a short English passage into the body. A group is optional.
+3. Save with `Ctrl+S`, then start with `Ctrl+R`.
+4. Type the highlighted word. Word spacing is handled automatically; type apostrophes and hyphens when they appear inside a word.
+5. When you see `Good`, press `r` to repeat or any other key to return. Press `Esc` during practice to leave without marking the run complete.
+
+Try this original sample:
+
+> A short break can be a chance to learn. Write one sentence at a time. Small steps make practice easier.
+
+The library starts empty. You can also try [two sample passages](examples/articles.json) in a separate data file using the instructions below.
+
+## Your library
+
+![Wordflow library with grouped articles, completion dots, and a sentence-by-sentence preview](docs/images/library.svg)
+
+Use **article** for passages split at sentence punctuation and line breaks, or **memo** for notes practiced one non-empty line at a time. Article splitting is a simple punctuation rule, so abbreviations may need manual adjustment.
+
+Articles can be grouped into collapsible sections. Use the arrow keys to preview an item and `Enter` to practice it; on a group heading, `Enter` expands or collapses the group. Clicking an article starts practice too. Long titles can be viewed with the horizontal scrollbar. The preview shows completion dots and follows the same sentence breaks as practice.
+
+| Shortcut | Action in the library |
+| --- | --- |
+| `Ctrl+N` | New article |
+| `Ctrl+S` | Save the editor |
+| `Ctrl+R` | Practice the selected saved item |
+| `Ctrl+D` twice | Delete the selected item |
+| `Ctrl+T` | Switch between article and memo |
+
+Save edits before switching items or starting practice. The app does not autosave. Practice currently recognizes English letters (`A–Z`), including words with apostrophes and hyphens; numbers and other punctuation are not typing targets.
+
+## Local data and sample content
+
+The default data file is `~/.wordflow/articles.json` (`~` means your home folder). The `config` button shows the actual path. Existing installations may use the legacy `~/.spelllane/articles.json` path.
+
+To try the included samples without replacing your library, run from the repository folder:
 
 ```bash
-~/.wordflow/articles.json
+WORDFLOW_DATA_PATH=examples/articles.json .venv/bin/wordflow
 ```
 
-兼容旧路径：
+On Windows PowerShell:
+
+```powershell
+$env:WORDFLOW_DATA_PATH = "examples/articles.json"
+.\.venv\Scripts\wordflow.exe
+Remove-Item Env:WORDFLOW_DATA_PATH
+```
+
+Practice updates the selected JSON file, including the sample file's completion counts. To import your own records or make a backup, close Wordflow first and copy or edit the file shown in `config`. Back up your existing file before replacing it. There is no merge/import wizard.
+
+See [the data format](docs/data-format.md) for fields and custom sentence breaks.
+
+## Development and standalone builds
 
 ```bash
-~/.spelllane/articles.json
-```
-
-每条记录使用统一 JSON 结构（示例）：
-
-```json
-[
-  {
-    "article_id": "uuid",
-    "title": "title",
-    "body": "raw text",
-    "mode": "article",
-    "sentences": ["segment 1", "segment 2"]
-  }
-]
-```
-
-> `mode` 支持 `article` 和 `note`（UI 中显示为 Memo）。
-
-## 测试
-
-```bash
+python -m pip install -e ".[dev]"
 pytest -q
+PYTHONPATH=src python3 -m compileall -q src tests
 ```
 
-## Windows 单文件打包
+On macOS/Linux, `./run-dev.sh` runs the source with the active Python environment. See [CONTRIBUTING.md](CONTRIBUTING.md) for the project scope and how to report reproducible bugs, and [build instructions](docs/building.md) for Windows and Linux standalone executables.
 
-Windows `.exe` 需要在 Windows 环境中构建。PowerShell 中执行：
+The maintainer develops on macOS. Windows and Linux build scripts are included; they need to be built and checked on their target systems.
 
-```powershell
-cd path\to\spelllane
-.\scripts\build-windows.cmd
-```
+## Help make Wordflow useful
 
-生成文件：
+If Wordflow fits your routine, a star helps you bookmark it and shows interest in the project. Reports about confusing steps, terminal problems, and real practice needs are especially useful. [Open an issue](https://github.com/KaiXinChaoRen1/wordflow/issues) in English or Chinese, or send a small, focused pull request.
 
-```text
-dist\windows\wordflow.exe
-```
+## License
 
-把 `wordflow.exe` 放到例如 `C:\Tools\wordflow\wordflow.exe`，并把目录加入 `PATH`：
-
-```powershell
-setx PATH "$env:PATH;C:\Tools\wordflow"
-```
-
-重新打开终端后执行：
-
-```powershell
-wordflow
-```
-
-## Linux 单文件打包
-
-Linux 可执行文件需要在 Linux 环境中构建。执行：
-
-```bash
-cd /path/to/spelllane
-./scripts/build-linux.sh
-```
-
-生成文件：
-
-```text
-dist/linux/wordflow
-```
-
-可以直接运行：
-
-```bash
-./dist/linux/wordflow
-```
-
-放到用户 PATH 后可直接执行：
-
-```bash
-mkdir -p ~/.local/bin
-cp dist/linux/wordflow ~/.local/bin/wordflow
-chmod +x ~/.local/bin/wordflow
-wordflow
-```
+[MIT](LICENSE). Built with [Textual](https://github.com/Textualize/textual).
