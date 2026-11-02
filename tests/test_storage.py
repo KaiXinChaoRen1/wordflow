@@ -2,7 +2,52 @@ import json
 
 import pytest
 
-from wordflow.storage import Article, ArticleStore
+from wordflow.storage import Article, ArticleStore, QuizStore
+
+
+def test_failed_save_preserves_existing_file(tmp_path, monkeypatch):
+    path = tmp_path / "articles.json"
+    store = ArticleStore(path)
+    store.upsert_article([], title="Original", body="Original body.")
+    original = path.read_text(encoding="utf-8")
+
+    def fail_dump(*args, **kwargs):
+        args[1].write("partial")
+        raise OSError("disk error")
+
+    monkeypatch.setattr("wordflow.storage.json.dump", fail_dump)
+    with pytest.raises(OSError, match="disk error"):
+        store.save_articles([])
+    assert path.read_text(encoding="utf-8") == original
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_quiz_file_errors_identify_item_and_pair(tmp_path):
+    path = tmp_path / "quizzes.json"
+    path.write_text(json.dumps([{"id": "one", "title": "Test", "pairs": [{"zh": "你好"}]}]), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"quizzes.json, item 1: pair 1"):
+        QuizStore(path).load_articles()
+
+
+def test_quiz_store_preserves_progress_for_name_edits(tmp_path):
+    store = QuizStore(tmp_path / "quizzes.json")
+    items = store.upsert_article([], "One", "你好\nHello world.", article_id="one")
+    store.save_practice_progress("one", 0, 1)
+    items = store.upsert_article(store.load_articles(), "Renamed", items[0].body, article_id="one")
+    assert items[0].practice_word == 1
+    items = store.upsert_article(items, "Renamed", "你好\nHello friend.", article_id="one")
+    assert items[0].practice_word == 0
+
+
+def test_quiz_save_does_not_overwrite_external_changes(tmp_path):
+    path = tmp_path / "quizzes.json"
+    store = QuizStore(path)
+    items = store.upsert_article([], "One", "你好\nHello.", article_id="one")
+    external = '[{"id":"two","title":"External","pairs":[{"zh":"再见","en":"Goodbye"}]}]'
+    path.write_text(external, encoding="utf-8")
+    with pytest.raises(ValueError, match="changed on disk; reload"):
+        store.upsert_article(items, "Edited", "你好\nHello.", article_id="one")
+    assert path.read_text(encoding="utf-8") == external
 
 
 def test_upsert_note_uses_lines_and_default_timestamp_title(tmp_path):
@@ -134,7 +179,7 @@ def test_load_articles_normalizes_unknown_mode_to_article(tmp_path):
     assert articles[0].mode == "article"
 
 
-def test_load_articles_clamps_completed_count(tmp_path):
+def test_load_articles_normalizes_completed_count(tmp_path):
     path = tmp_path / "articles.json"
     path.write_text(
         json.dumps(
@@ -149,7 +194,7 @@ def test_load_articles_clamps_completed_count(tmp_path):
     )
 
     counts = {a.article_id: a.completed_count for a in ArticleStore(path).load_articles()}
-    assert counts == {"1": 3, "2": 0, "3": 2, "4": 0}
+    assert counts == {"1": 9, "2": 0, "3": 2, "4": 0}
 
 
 def test_load_articles_note_without_title_gets_default(tmp_path):
@@ -174,7 +219,7 @@ def test_load_articles_blank_group_gets_default(tmp_path):
     assert ArticleStore(path).load_articles()[0].group == "Ungrouped"
 
 
-def test_complete_article_updates_count_and_caps_at_three(tmp_path):
+def test_complete_article_updates_count_beyond_three(tmp_path):
     store = ArticleStore(tmp_path / "articles.json")
     articles = store.upsert_article([], title="A", body="One.", mode="article", article_id="1")
     articles[0].completed_count = 2
@@ -186,7 +231,17 @@ def test_complete_article_updates_count_and_caps_at_three(tmp_path):
 
     completed = store.complete_article("1")
     assert completed is not None
-    assert completed.completed_count == 3
+    assert completed.completed_count == 4
+
+
+def test_editing_body_resets_progress_but_renaming_preserves_it(tmp_path):
+    store = ArticleStore(tmp_path / "articles.json")
+    articles = store.upsert_article([], title="A", body="One two.", article_id="1")
+    store.save_practice_progress("1", 0, 1)
+    articles = store.upsert_article(store.load_articles(), title="B", body="One two.", article_id="1")
+    assert articles[0].practice_word == 1
+    articles = store.upsert_article(articles, title="B", body="Changed text.", article_id="1")
+    assert (articles[0].practice_sentence, articles[0].practice_word) == (0, 0)
 
 
 def test_complete_article_missing_id_returns_none(tmp_path):

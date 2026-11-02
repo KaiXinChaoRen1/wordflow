@@ -7,6 +7,27 @@ from typing import List
 
 SENTENCE_BREAK_RE = re.compile(r"(?<=[.!?;:])\s+|\n+")
 WORD_RE = re.compile(r"[A-Za-z]+(?:['-][A-Za-z]+)*")
+QUIZ_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*")
+
+
+def quiz_words(text: str) -> List[str]:
+    return QUIZ_WORD_RE.findall(text)
+
+
+def parse_quiz(text: str) -> List[dict[str, str]]:
+    lines = [(number, line.strip()) for number, line in enumerate(text.splitlines(), 1) if line.strip()]
+    if not lines:
+        raise ValueError("empty quiz")
+    if len(lines) % 2:
+        raise ValueError(f"line {lines[-1][0]}: missing English")
+    pairs = []
+    for (zh_line, zh), (en_line, en) in zip(lines[::2], lines[1::2]):
+        if not re.search(r"[\u3400-\u9fff]", zh):
+            raise ValueError(f"line {zh_line}: expected Chinese")
+        if re.search(r"[\u3400-\u9fff]", en) or not re.search(r"[A-Za-z]", en):
+            raise ValueError(f"line {en_line}: expected English")
+        pairs.append({"zh": zh, "en": en})
+    return pairs
 
 
 def split_sentences(text: str) -> List[str]:

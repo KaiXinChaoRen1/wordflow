@@ -23,14 +23,16 @@ from textual.widgets import (
     TextArea,
 )
 
-from .parsing import extract_words
-from .storage import DEFAULT_GROUP, Article, ArticleStore, ContentMode
+from .parsing import extract_words, quiz_words
+from .storage import DEFAULT_GROUP, Article, ArticleStore, ContentMode, Quiz, QuizStore
 
 
 def completion_marks(article: Article) -> Text:
+    lit = min(3, article.completed_count)
     return Text.assemble(
-        ("●" * article.completed_count, "#a4884a"),
-        ("○" * (3 - article.completed_count), "dim"),
+        ("●" * lit, "#a4884a"),
+        ("○" * (3 - lit), "dim"),
+        (f" *{article.completed_count}" if article.completed_count > 3 else "", "dim"),
     )
 
 
@@ -118,8 +120,10 @@ class ImportArticlesScreen(Screen[None]):
                 classes="settings-copy",
             )
             yield Static(storage_path, classes="settings-path")
+            yield Static("quiz data path", classes="settings-title")
+            yield Static(str(self.store.path.with_name("quizzes.json")), classes="settings-path")
             yield Static(
-                "expected format: json array using the current schema.",
+                "edit JSON, then use reload in the library.",
                 classes="settings-copy",
             )
             yield Static(f"legacy path: {legacy_path}", classes="settings-copy")
@@ -139,53 +143,66 @@ class PracticeScreen(Screen[None]):
         article: Article,
         store: ArticleStore,
         on_completed: Optional[Callable[[], None]] = None,
+        on_progress: Optional[Callable[[Article], None]] = None,
     ) -> None:
         super().__init__()
         self.article = article
         self.store = store
         self.on_completed = on_completed
+        self.on_progress = on_progress
         self.current_words = (
             extract_words(self.article.sentences[0]) if self.article.sentences else []
         )
         self.current_prefix = ""
         self.active_sentence_index: Optional[int] = None
         self.is_complete = False
+        self.choosing_resume = bool(article.practice_sentence or article.practice_word)
+        self.progress_changed = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="practice-root"):
             yield Static(self.article.title, id="practice-title")
+            yield Static(
+                f"Paused at sentence {self.article.practice_sentence + 1} of {len(self.article.sentences)}\n"
+                "Enter  Continue    r  Start over",
+                id="resume-prompt",
+                markup=False,
+            )
             yield Static("", id="practice-progress")
             with VerticalScroll(id="article-view"):
                 for index, sentence in enumerate(self.article.sentences):
                     yield Static(
-                        sentence,
+                        self.display_sentence(index),
                         id=self.sentence_widget_id(index),
                         classes="article-sentence",
+                        markup=False,
                     )
             yield Static("", id="practice-message")
             yield Input(placeholder="type", id="word-input")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#resume-prompt", Static).display = self.choosing_resume
+        if self.choosing_resume:
+            self.query_one("#word-input", Input).disabled = True
+            return
         self.refresh_sentence()
         self.query_one("#word-input", Input).focus()
 
+    def on_unmount(self) -> None:
+        if self.progress_changed and self.on_progress is not None:
+            self.on_progress(self.article)
+
     def refresh_sentence(self) -> None:
-        if not self.article.sentences:
-            self.finish_article()
-            return
-
-        if self.sentence_index >= len(self.article.sentences):
-            self.finish_article()
-            return
-
-        sentence = self.article.sentences[self.sentence_index]
-        self.current_words = extract_words(sentence)
-        if not self.current_words:
+        while self.sentence_index < len(self.article.sentences):
+            self.current_words = self.practice_words(self.article.sentences[self.sentence_index])
+            if self.current_words:
+                break
             self.sentence_index += 1
             self.word_index = 0
             self.current_prefix = ""
-            self.refresh_sentence()
+        else:
+            self.finish_article()
             return
 
         self.refresh_article_view()
@@ -204,6 +221,15 @@ class PracticeScreen(Screen[None]):
 
     def sentence_widget_id(self, index: int) -> str:
         return f"sentence-{index}"
+
+    def display_sentence(self, index: int) -> str:
+        return self.article.sentences[index]
+
+    def practice_words(self, sentence: str) -> List[str]:
+        return extract_words(sentence)
+
+    def show_wrong_input(self, target: str) -> None:
+        self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
 
     def set_message(self, text: str) -> None:
         self.query_one("#practice-message", Static).update(text)
@@ -294,7 +320,7 @@ class PracticeScreen(Screen[None]):
 
         if not target.casefold().startswith(guess.casefold()):
             self.sync_input_value()
-            self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
+            self.show_wrong_input(target)
             return
 
         self.current_prefix = guess
@@ -312,14 +338,35 @@ class PracticeScreen(Screen[None]):
             self.sentence_index += 1
             self.word_index = 0
             self.refresh_sentence()
+            if not self.is_complete:
+                self.save_progress()
             return
 
+        self.save_progress()
         self.refresh_article_view()
         self.sync_input_value()
         input_widget.cursor_position = len(input_widget.value)
         self.set_message("[step] word complete")
 
     def on_key(self, event) -> None:
+        if self.choosing_resume:
+            if event.key not in ("enter", "r"):
+                return
+            event.stop()
+            self.choosing_resume = False
+            self.query_one("#resume-prompt", Static).display = False
+            if event.key == "enter":
+                self.sentence_index = self.article.practice_sentence
+                self.word_index = self.article.practice_word
+            else:
+                self.sentence_index = 0
+                self.word_index = 0
+                self.save_progress()
+            input_widget = self.query_one("#word-input", Input)
+            input_widget.disabled = False
+            self.refresh_sentence()
+            input_widget.focus()
+            return
         if not self.is_complete:
             return
         event.stop()
@@ -328,12 +375,21 @@ class PracticeScreen(Screen[None]):
         else:
             self.app.pop_screen()
 
+    def save_progress(self) -> None:
+        self.store.save_practice_progress(
+            self.article.article_id, self.sentence_index, self.word_index
+        )
+        self.article.practice_sentence = self.sentence_index
+        self.article.practice_word = self.word_index
+        self.progress_changed = True
+
     def restart_practice(self) -> None:
         self.is_complete = False
         self.active_sentence_index = None
         self.sentence_index = 0
         self.word_index = 0
         self.current_prefix = ""
+        self.save_progress()
         input_widget = self.query_one("#word-input", Input)
         input_widget.disabled = False
         self.refresh_sentence()
@@ -346,7 +402,7 @@ class PracticeScreen(Screen[None]):
         self.is_complete = True
         for index, sentence in enumerate(self.article.sentences):
             widget = self.query_one(f"#{self.sentence_widget_id(index)}", Static)
-            widget.update(sentence)
+            widget.update(self.display_sentence(index))
             widget.remove_class("article-sentence--active")
         input_widget = self.query_one("#word-input", Input)
         with input_widget.prevent(Input.Changed):
@@ -358,8 +414,49 @@ class PracticeScreen(Screen[None]):
         completed_article = self.store.complete_article(self.article.article_id)
         if completed_article is not None:
             self.article.completed_count = completed_article.completed_count
+            self.article.practice_sentence = 0
+            self.article.practice_word = 0
+            self.progress_changed = False
             if self.on_completed is not None:
                 self.on_completed()
+
+
+class QuizPracticeScreen(PracticeScreen):
+    BINDINGS = [("escape", "app.pop_screen", "Back"), ("ctrl+g", "hint", "Hint")]
+
+    def on_mount(self) -> None:
+        for index in range(len(self.article.sentences)):
+            self.query_one(f"#{self.sentence_widget_id(index)}", Static).display = (
+                index == self.article.practice_sentence if self.choosing_resume else index == 0
+            )
+        super().on_mount()
+
+    def display_sentence(self, index: int) -> str:
+        assert isinstance(self.article, Quiz) and self.article.pairs is not None
+        return self.article.pairs[index]["zh"]
+
+    def practice_words(self, sentence: str) -> List[str]:
+        return quiz_words(sentence)
+
+    def refresh_progress(self) -> None:
+        current = min(self.sentence_index + 1, len(self.article.sentences))
+        self.query_one("#practice-progress", Static).update(
+            Text(f"{current} / {len(self.article.sentences)} · Ctrl+G hint", "dim")
+        )
+
+    def show_wrong_input(self, target: str) -> None:
+        self.set_message("[wrong]")
+
+    def refresh_article_view(self) -> None:
+        for index in range(len(self.article.sentences)):
+            widget = self.query_one(f"#{self.sentence_widget_id(index)}", Static)
+            widget.display = index == self.sentence_index
+        self.active_sentence_index = self.sentence_index
+
+    def action_hint(self) -> None:
+        if not self.is_complete and not self.choosing_resume and self.current_words:
+            target = self.current_words[self.word_index]
+            self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
 
 
 class LibraryScreen(Screen[None]):
@@ -371,6 +468,9 @@ class LibraryScreen(Screen[None]):
         ("ctrl+r", "run", "Run"),
         ("ctrl+d", "delete", "Del"),
         ("ctrl+t", "toggle_filter", "Mode"),
+        ("ctrl+l", "focus_list", "List"),
+        ("ctrl+e", "edit", "Edit"),
+        ("escape", "close_editor", "Back"),
     ]
 
     CSS = """
@@ -383,11 +483,12 @@ class LibraryScreen(Screen[None]):
     #library-root {
         height: 1fr;
         padding: 0 1;
+        align-horizontal: center;
     }
 
     #library-sidebar {
-        width: 34;
-        margin-right: 1;
+        width: 1fr;
+        max-width: 100;
     }
 
     #sidebar-card, #editor-card {
@@ -410,7 +511,7 @@ class LibraryScreen(Screen[None]):
     #filter-switch {
         height: 1;
         margin-bottom: 1;
-        background: #111316;
+        background: transparent;
     }
 
     #filter-label {
@@ -420,34 +521,37 @@ class LibraryScreen(Screen[None]):
     }
 
     .filter-button {
-        width: 11;
+        width: 12;
         height: 1;
         min-height: 1;
-        background: #111316;
+        background: transparent;
         color: #767d83;
-        margin-right: 1;
-        padding: 0 1;
+        margin-right: 0;
+        padding: 0;
         text-style: none;
     }
 
     .filter-button.-active {
-        background: #26312b;
+        background: transparent;
         color: #d4d9dd;
         text-style: bold;
     }
 
     .filter-button:hover {
-        background: #1a1d20;
+        background: transparent;
         color: #c0c6cb;
     }
 
     .filter-button:focus {
-        background: #1a1d20;
+        background: transparent;
         color: #cfd4d8;
         outline: none;
     }
 
     #editor-card {
+        display: none;
+        width: 1fr;
+        max-width: 100;
         padding: 1;
     }
 
@@ -455,8 +559,34 @@ class LibraryScreen(Screen[None]):
         height: 2;
     }
 
+    #split-options {
+        height: 1;
+        margin-bottom: 1;
+    }
+
+    #split-label {
+        width: 8;
+        color: #767d83;
+    }
+
+    .split-button {
+        width: 12;
+        min-width: 0;
+        height: 1;
+        min-height: 1;
+        border: none;
+        padding: 0;
+        background: transparent;
+        color: #767d83;
+    }
+
+    .split-button.is-active {
+        color: #d4d9dd;
+        text-style: bold;
+    }
+
     #editor-completion {
-        width: 4;
+        width: auto;
         height: 1;
         margin-left: 1;
     }
@@ -493,7 +623,7 @@ class LibraryScreen(Screen[None]):
 
     #status {
         height: 1;
-        margin-top: 1;
+        padding: 0 2;
         color: #6a7177;
     }
 
@@ -507,6 +637,7 @@ class LibraryScreen(Screen[None]):
 
     .action-button {
         width: auto;
+        min-width: 0;
         height: 1;
         min-height: 1;
         border: none;
@@ -583,7 +714,8 @@ class LibraryScreen(Screen[None]):
     def __init__(self, store: ArticleStore) -> None:
         super().__init__()
         self.store = store
-        self.articles: List[Article] = self.store.load_articles()
+        self.quiz_store = QuizStore(store.path.with_name("quizzes.json"))
+        self.articles: List[Article] = self.store.load_articles() + self.quiz_store.load_articles()
         self.is_creating_new = False
         self.previous_selected_article_id: Optional[str] = None
         self.previous_filter: ContentMode = "article"
@@ -595,51 +727,53 @@ class LibraryScreen(Screen[None]):
         self.loaded_title = ""
         self.loaded_group = DEFAULT_GROUP
         self.loaded_body = ""
+        self.loaded_mode: ContentMode = "article"
         # Article armed for deletion, awaiting a confirming second Del press.
         self.pending_delete_id: Optional[str] = None
         self.expanded_groups: set[str] = set()
         self.pending_highlight_group: Optional[str] = None
+        self.editing = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="library-root"):
             with Vertical(id="library-sidebar"):
                 with Vertical(id="sidebar-card"):
                     with Horizontal(id="filter-switch"):
-                        yield Static("mode", id="filter-label")
                         yield Static(
-                            "article",
+                            "copy",
                             id="filter-article",
                             classes="filter-button",
                             markup=False,
                         )
-                        yield Static(
-                            "memo",
-                            id="filter-note",
-                            classes="filter-button",
-                            markup=False,
-                        )
+                        yield Static("quiz", id="filter-quiz", classes="filter-button", markup=False)
                     yield ListView(id="article-list")
             with Vertical(id="editor-card"):
                 yield Input(placeholder="group", id="editor-group")
                 with Horizontal(id="editor-heading"):
                     yield Input(placeholder="name", id="editor-title")
                     yield Static("", id="editor-completion")
+                with Horizontal(id="split-options"):
+                    yield Static("split", id="split-label")
+                    yield Button("sentence", id="split-sentence", classes="split-button")
+                    yield Button("line", id="split-line", classes="split-button")
                 yield TextArea("", id="article-body")
-                yield Static("", id="status")
+        yield Static("", id="status")
         with Horizontal(id="action-row"):
-            yield Button("+article", id="action-new-article", classes="action-button")
-            yield Button("+memo", id="action-new-memo", classes="action-button")
+            yield Button("+new", id="action-new", classes="action-button")
+            yield Button("edit", id="action-edit", classes="action-button")
             yield Button("save", id="action-save", classes="action-button")
+            yield Button("discard", id="action-cancel-new", classes="action-button")
+            yield Button("back", id="action-back", classes="action-button")
             yield Button("run", id="action-run", classes="action-button")
             yield Button("del", id="action-delete", classes="action-button")
             yield Button("config", id="action-settings", classes="action-button")
-            yield Button("cancel", id="action-cancel-new", classes="action-button")
+            yield Button("reload", id="action-reload", classes="action-button")
 
     def on_mount(self) -> None:
         self.refresh_article_list()
         self.sync_filter_controls()
         self.sync_action_controls()
-        self.focus_editor()
+        self.query_one("#article-list", ListView).focus()
 
     def refresh_article_list(self, announce_status: bool = True) -> None:
         self.announce_on_reconcile = announce_status
@@ -678,7 +812,8 @@ class LibraryScreen(Screen[None]):
             self.pending_highlight_group = None
             self.selected_article_id = None
             list_view.index = None
-            self.clear_editor(announce=announce)
+            if not self.is_creating_new:
+                self.clear_editor(announce=announce)
             return
 
         if not self.selected_article_id:
@@ -723,7 +858,7 @@ class LibraryScreen(Screen[None]):
             return
 
         list_view.index = selected_index
-        if isinstance(selected_item, ArticleItem):
+        if isinstance(selected_item, ArticleItem) and not self.editor_is_dirty():
             self.load_article(selected_item.article, announce=announce)
 
     def highlight_group_header(self, list_view: ListView, group: Optional[str]) -> bool:
@@ -756,7 +891,7 @@ class LibraryScreen(Screen[None]):
         self.sync_article_list_selected_class()
         self.sync_action_controls()
         if announce:
-            self.set_status(f"[ready] {article.title}")
+            self.set_status("[ready] Enter to run in list")
 
     def clear_editor(self, announce: bool = True) -> None:
         self.pending_delete_id = None
@@ -796,6 +931,7 @@ class LibraryScreen(Screen[None]):
         self.loaded_title = title
         self.loaded_group = group
         self.loaded_body = body
+        self.loaded_mode = self.current_mode
 
     def editor_is_dirty(self) -> bool:
         title = self.query_one("#editor-title", Input).value
@@ -805,6 +941,7 @@ class LibraryScreen(Screen[None]):
             title != self.loaded_title
             or group != self.loaded_group
             or body != self.loaded_body
+            or self.current_mode != self.loaded_mode
         )
 
     @on(Input.Changed, "#editor-title")
@@ -815,23 +952,47 @@ class LibraryScreen(Screen[None]):
         # set value == snapshot) never flag as edited, so no guard is needed.
         if self.editor_is_dirty():
             self.set_status("[edited]")
+        self.sync_action_controls()
 
     def sync_filter_controls(self) -> None:
         article_button = self.query_one("#filter-article", Static)
-        note_button = self.query_one("#filter-note", Static)
+        quiz_button = self.query_one("#filter-quiz", Static)
 
         for button, label, active in (
-            (article_button, "article", self.current_filter == "article"),
-            (note_button, "memo", self.current_filter == "note"),
+            (article_button, "copy", self.current_filter == "article"),
+            (quiz_button, "quiz", self.current_filter == "quiz"),
         ):
             button.update(f"> {label}" if active else f"  {label}")
             button.set_class(active, "-active")
 
     def sync_action_controls(self) -> None:
+        self.query_one("#split-options").display = self.current_mode != "quiz"
+        for mode, selector in (("article", "#split-sentence"), ("note", "#split-line")):
+            button = self.query_one(selector, Button)
+            button.label = f"> {'sentence' if mode == 'article' else 'line'}" if self.current_mode == mode else ("sentence" if mode == "article" else "line")
+            button.set_class(self.current_mode == mode, "is-active")
         cancel_button = self.query_one("#action-cancel-new", Button)
-        # Save is always available so edits to existing articles can be stored;
-        # Cancel only appears while drafting a brand-new item.
-        cancel_button.display = self.is_creating_new
+        cancel_button.display = self.editing and (self.is_creating_new or self.editor_is_dirty())
+        for button in ("action-new", "action-edit", "action-run", "action-delete", "action-settings", "action-reload"):
+            self.query_one(f"#{button}", Button).display = not self.editing
+        self.query_one("#action-save", Button).display = self.editing
+        self.query_one("#action-back", Button).display = self.editing
+
+    def show_editor(self, editing: bool) -> None:
+        self.editing = editing
+        self.query_one("#library-sidebar").display = not editing
+        self.query_one("#editor-card").display = editing
+        self.sync_action_controls()
+        if editing:
+            self.focus_editor()
+        else:
+            self.query_one("#article-list", ListView).focus()
+
+    def allow_navigation(self) -> bool:
+        if self.editor_is_dirty():
+            self.set_status("[unsaved] save or discard")
+            return False
+        return True
 
     def filtered_articles(self) -> List[Article]:
         return [
@@ -844,7 +1005,7 @@ class LibraryScreen(Screen[None]):
         groups: List[str] = []
         grouped: dict[str, List[Article]] = {}
         for article in self.articles:
-            if article.mode != self.current_filter:
+            if not self.matches_filter(article):
                 continue
             if article.group not in grouped:
                 groups.append(article.group)
@@ -855,9 +1016,16 @@ class LibraryScreen(Screen[None]):
             for group in groups
         ]
 
+    def matches_filter(self, article: Article) -> bool:
+        return (article.mode == "quiz") == (self.current_filter == "quiz")
+
     def set_filter(self, mode: ContentMode) -> None:
+        if mode == self.current_filter:
+            return
+        if not self.allow_navigation():
+            return
         self.is_creating_new = False
-        self.current_filter = mode
+        self.current_filter = "quiz" if mode == "quiz" else "article"
         self.current_mode = mode
         self.selected_article_id = None
         self.expanded_groups.clear()
@@ -870,7 +1038,7 @@ class LibraryScreen(Screen[None]):
         self.previous_selected_article_id = self.selected_article_id
         self.previous_filter = self.current_filter
         self.current_mode = mode
-        self.current_filter = mode
+        self.current_filter = "quiz" if mode == "quiz" else "article"
         self.selected_article_id = None
         new_title = self.store.default_note_title() if mode == "note" else ""
         new_group = DEFAULT_GROUP
@@ -881,9 +1049,8 @@ class LibraryScreen(Screen[None]):
         self.mark_editor_saved(new_title, new_group, "")
         self.set_status("[new] edit then save")
         self.sync_filter_controls()
-        self.sync_action_controls()
+        self.show_editor(True)
         self.refresh_article_list()
-        self.focus_editor()
 
     @on(ListView.Highlighted, "#article-list")
     def handle_highlight(self, event: ListView.Highlighted) -> None:
@@ -903,8 +1070,8 @@ class LibraryScreen(Screen[None]):
             return
         if not isinstance(event.item, ArticleItem):
             return
-        self.load_article_from_item(event.item)
-        self.handle_start()
+        if self.load_article_from_item(event.item):
+            self.handle_start()
 
     def toggle_group(self, group: str) -> None:
         self.pending_highlight_group = group
@@ -914,30 +1081,49 @@ class LibraryScreen(Screen[None]):
             self.expanded_groups.add(group)
         self.refresh_article_list(announce_status=False)
 
-    def load_article_from_item(self, item: Optional[ListItem]) -> None:
+    def load_article_from_item(self, item: Optional[ListItem]) -> bool:
         if not isinstance(item, ArticleItem):
-            return
+            return False
         if not self.is_creating_new and self.selected_article_id == item.article.article_id:
-            return
+            return True
+        if not self.allow_navigation():
+            return False
         self.load_article(item.article)
+        return True
 
     @on(Click, "#filter-article")
     def handle_filter_article_pressed(self, event: Click) -> None:
         event.stop()
         self.set_filter("article")
 
-    @on(Click, "#filter-note")
-    def handle_filter_note_pressed(self, event: Click) -> None:
-        event.stop()
-        self.set_filter("note")
+    @on(Button.Pressed, "#split-sentence")
+    @on(Button.Pressed, "#split-line")
+    def handle_split_pressed(self, event: Button.Pressed) -> None:
+        self.current_mode = "article" if event.button.id == "split-sentence" else "note"
+        self.sync_action_controls()
+        if self.editor_is_dirty():
+            self.set_status("[edited]")
+        elif self.is_creating_new:
+            self.set_status("[new] edit then save")
+        else:
+            self.set_status("[ready]")
 
-    @on(Button.Pressed, "#action-new-article")
-    def handle_action_new_article_pressed(self) -> None:
+    @on(Click, "#filter-quiz")
+    def handle_filter_quiz_pressed(self, event: Click) -> None:
+        event.stop()
+        self.set_filter("quiz")
+
+    @on(Button.Pressed, "#action-new")
+    def handle_action_new_pressed(self) -> None:
         self.handle_new()
 
-    @on(Button.Pressed, "#action-new-memo")
-    def handle_action_new_memo_pressed(self) -> None:
-        self.start_new_item("note")
+    @on(Button.Pressed, "#action-edit")
+    def handle_action_edit_pressed(self) -> None:
+        self.action_edit()
+
+    @on(Button.Pressed, "#action-back")
+    def handle_action_back_pressed(self) -> None:
+        self.action_close_editor()
 
     @on(Button.Pressed, "#action-save")
     def handle_action_save_pressed(self) -> None:
@@ -955,6 +1141,17 @@ class LibraryScreen(Screen[None]):
     def handle_action_settings_pressed(self) -> None:
         self.open_settings()
 
+    @on(Button.Pressed, "#action-reload")
+    def handle_reload(self) -> None:
+        if not self.allow_navigation():
+            return
+        try:
+            self.refresh_articles_from_store(announce_status=False)
+        except ValueError as error:
+            self.set_status(f"[invalid] {error}")
+            return
+        self.set_status("[reloaded]")
+
     @on(Button.Pressed, "#action-cancel-new")
     def handle_action_cancel_new_pressed(self) -> None:
         self.cancel_new()
@@ -963,22 +1160,57 @@ class LibraryScreen(Screen[None]):
         self.handle_new()
 
     def action_save(self) -> None:
-        self.handle_save()
+        if self.editing:
+            self.handle_save()
 
     def action_run(self) -> None:
         self.handle_start()
 
     def action_toggle_filter(self) -> None:
-        self.set_filter("note" if self.current_filter == "article" else "article")
+        if self.editing:
+            self.set_status("[editing] save or back")
+            return
+        modes: tuple[ContentMode, ...] = ("article", "quiz")
+        self.set_filter(modes[(modes.index(self.current_filter) + 1) % len(modes)])
+
+    def action_focus_list(self) -> None:
+        if not self.editing:
+            self.query_one("#article-list", ListView).focus()
+
+    def action_edit(self) -> None:
+        if self.editing:
+            return
+        if not self.selected_article_id:
+            self.set_status("[missing] select an item")
+            return
+        self.show_editor(True)
+
+    def action_close_editor(self) -> None:
+        if not self.editing or not self.allow_navigation():
+            return
+        if self.is_creating_new:
+            self.cancel_new()
+        else:
+            self.show_editor(False)
 
     def action_delete(self) -> None:
-        self.handle_delete()
+        if not self.editing:
+            self.handle_delete()
 
     def handle_new(self) -> None:
-        self.start_new_item("article")
+        if self.allow_navigation():
+            self.start_new_item(self.current_filter)
 
     def cancel_new(self) -> None:
         if not self.is_creating_new:
+            article = next(
+                (a for a in self.articles if self.matches_filter(a) and a.article_id == self.selected_article_id), None
+            )
+            if article is not None:
+                self.load_article(article)
+            else:
+                self.clear_editor()
+            self.show_editor(False)
             return
 
         self.is_creating_new = False
@@ -988,6 +1220,7 @@ class LibraryScreen(Screen[None]):
         self.sync_filter_controls()
         self.sync_action_controls()
         self.refresh_article_list()
+        self.show_editor(False)
 
     def open_settings(self) -> None:
         self.app.push_screen(ImportArticlesScreen(self.store))
@@ -1001,32 +1234,34 @@ class LibraryScreen(Screen[None]):
             self.set_status("[missing] body")
             return
 
-        if self.current_mode == "article" and not title:
+        if self.current_mode in ("article", "quiz") and not title:
             self.set_status("[missing] name")
             return
 
         # Display-only sentence breaks must not rewrite the stored original.
         if body == self.loaded_body:
             original = next(
-                (a for a in self.articles if a.article_id == self.selected_article_id), None
+                (a for a in self.articles if (a.mode == "quiz") == (self.current_mode == "quiz") and a.article_id == self.selected_article_id), None
             )
             if original is not None:
                 body = original.body
 
         target_article_id = self.selected_article_id or str(uuid4())
-        updated_articles = self.store.upsert_article(
-            self.articles,
-            title=title,
-            body=body,
-            mode=self.current_mode,
-            group=group,
-            article_id=target_article_id,
-        )
-        self.articles = updated_articles
+        store = self.quiz_store if self.current_mode == "quiz" else self.store
+        selected = [a for a in self.articles if (a.mode == "quiz") == (self.current_mode == "quiz")]
+        try:
+            updated_articles = store.upsert_article(
+                selected, title=title, body=body, mode=self.current_mode,
+                group=group, article_id=target_article_id,
+            )
+        except ValueError as error:
+            self.set_status(f"[invalid] {error}")
+            return
+        self.articles = [a for a in self.articles if (a.mode == "quiz") != (self.current_mode == "quiz")] + updated_articles
         self.is_creating_new = False
         self.selected_article_id = target_article_id
         saved_article = next(
-            (article for article in self.articles if article.article_id == target_article_id),
+            (article for article in self.articles if article.mode == self.current_mode and article.article_id == target_article_id),
             None,
         )
         if saved_article is not None:
@@ -1040,6 +1275,7 @@ class LibraryScreen(Screen[None]):
                 saved_article.body,
             )
         self.refresh_article_list(announce_status=False)
+        self.show_editor(False)
         self.set_status("[saved]")
 
     def handle_delete(self) -> None:
@@ -1054,14 +1290,24 @@ class LibraryScreen(Screen[None]):
             return
 
         self.pending_delete_id = None
-        self.articles = self.store.delete_article(self.articles, self.selected_article_id)
+        store = self.quiz_store if self.current_filter == "quiz" else self.store
+        selected = [a for a in self.articles if (a.mode == "quiz") == (self.current_filter == "quiz")]
+        try:
+            updated = store.delete_article(selected, self.selected_article_id)
+        except ValueError as error:
+            self.set_status(f"[invalid] {error}")
+            return
+        self.articles = [a for a in self.articles if (a.mode == "quiz") != (self.current_filter == "quiz")] + updated
         self.selected_article_id = None
         self.refresh_article_list(announce_status=False)
         self.set_status("[removed] item")
 
     def handle_start(self) -> None:
+        if self.editing:
+            self.set_status("[editing] save or back")
+            return
         article = next(
-            (item for item in self.articles if item.article_id == self.selected_article_id),
+            (item for item in self.articles if self.matches_filter(item) and item.article_id == self.selected_article_id),
             None,
         )
         if article is None:
@@ -1072,13 +1318,22 @@ class LibraryScreen(Screen[None]):
             self.set_status("[invalid] empty")
             return
 
-        self.app.push_screen(PracticeScreen(article, self.store, self.refresh_articles_from_store))
+        screen = QuizPracticeScreen if isinstance(article, Quiz) else PracticeScreen
+        store = self.quiz_store if isinstance(article, Quiz) else self.store
+        self.app.push_screen(screen(article, store, self.refresh_articles_from_store, self.sync_practice_progress))
 
-    def refresh_articles_from_store(self) -> None:
+    def sync_practice_progress(self, practiced: Article) -> None:
+        for article in self.articles:
+            if article.mode == practiced.mode and article.article_id == practiced.article_id:
+                article.practice_sentence = practiced.practice_sentence
+                article.practice_word = practiced.practice_word
+                break
+
+    def refresh_articles_from_store(self, announce_status: bool = True) -> None:
         selected_article_id = self.selected_article_id
-        self.articles = self.store.load_articles()
+        self.articles = self.store.load_articles() + self.quiz_store.load_articles()
         self.selected_article_id = selected_article_id
-        self.refresh_article_list()
+        self.refresh_article_list(announce_status=announce_status)
 
 
 class WordflowApp(App[None]):
@@ -1109,6 +1364,13 @@ class WordflowApp(App[None]):
         color: #cfd4d8;
         text-style: bold;
         margin-bottom: 0;
+    }
+
+    #resume-prompt {
+        height: 2;
+        margin: 1 0;
+        color: #cfd4d8;
+        text-style: bold;
     }
 
     #practice-progress {

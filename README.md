@@ -17,7 +17,7 @@ If you spend your day at a keyboard and want to get more comfortable typing Engl
 - **Practice useful words.** Use your own text instead of a fixed word list.
 - **Get feedback as you type.** Correct letters advance the highlight; a wrong letter shows a hint and lets you try again. Matching is case-insensitive.
 - **Keep a quiet workspace.** A restrained terminal interface, keyboard shortcuts, and no sound.
-- **Build a repeatable habit.** Finish a passage, see `Good`, then press `r` to repeat. Three completion dots track up to three finished runs per item.
+- **Build a repeatable habit.** Finish a passage, see `Good`, then press `r` to repeat. Three completion dots and a count track finished runs per item.
 - **Own your data.** Plain local JSON, with no account, cloud sync, or telemetry in the app.
 
 This is guided copy-typing and spelling practice. The source text stays visible; there is no WPM scoring, pronunciation training, or vocabulary scheduling.
@@ -51,9 +51,9 @@ For later sessions, run `.venv/bin/wordflow` on macOS/Linux or `.\.venv\Scripts\
 
 ### Your first practice session
 
-1. Choose `+article` or press `Ctrl+N`.
-2. Enter a title and paste a short English passage into the body. A group is optional.
-3. Save with `Ctrl+S`, then start with `Ctrl+R`.
+1. Select `copy`, then choose `+new` or press `Ctrl+N`.
+2. In the editor, enter a title and paste a short English passage into the body. A group is optional.
+3. Save with `Ctrl+S` to return to the list, then start with `Ctrl+R`.
 4. Type the highlighted word. Word spacing is handled automatically; type apostrophes and hyphens when they appear inside a word.
 5. When you see `Good`, press `r` to repeat or any other key to return. Press `Esc` during practice to leave without marking the run complete.
 
@@ -67,19 +67,51 @@ The library starts empty. You can also try [two sample passages](examples/articl
 
 ![Wordflow library with grouped articles, completion dots, and a sentence-by-sentence preview](docs/images/library.svg)
 
-Use **article** for passages split at sentence punctuation and line breaks, or **memo** for notes practiced one non-empty line at a time. Article splitting is a simple punctuation rule, so abbreviations may need manual adjustment.
+Use **copy** for passages and notes. In the editor choose `sentence` to split at sentence punctuation and line breaks, or `line` to practice one non-empty line at a time. Sentence splitting is a simple punctuation rule, so abbreviations may need manual adjustment. Existing article and memo records appear together in Copy and retain their original splitting rules.
 
-Articles can be grouped into collapsible sections. Use the arrow keys to preview an item and `Enter` to practice it; on a group heading, `Enter` expands or collapses the group. Clicking an article starts practice too. Long titles can be viewed with the horizontal scrollbar. The preview shows completion dots and follows the same sentence breaks as practice.
+Articles can be grouped into collapsible sections. Use the arrow keys to select an item and `Enter` to practice it; on a group heading, `Enter` expands or collapses the group. Clicking an article starts practice too. Long titles can be viewed with the horizontal scrollbar. Select an item and use `edit` or `Ctrl+E` to open its editor; `Esc` returns to the list when there are no unsaved changes.
+
+If you leave practice before finishing, your last completed word is saved. Next time, press `Enter` to continue or `r` to start over. Editing the body resets that saved position.
 
 | Shortcut | Action in the library |
 | --- | --- |
-| `Ctrl+N` | New article |
+| `Ctrl+N` | New item in the selected mode |
+| `Ctrl+L` | Focus the list |
+| `Ctrl+E` | Edit the selected item |
 | `Ctrl+S` | Save the editor |
 | `Ctrl+R` | Practice the selected saved item |
 | `Ctrl+D` twice | Delete the selected item |
-| `Ctrl+T` | Switch between article and memo |
+| `Ctrl+T` | Switch between copy and quiz |
 
-Save edits before switching items or starting practice. The app does not autosave. Practice currently recognizes English letters (`A–Z`), including words with apostrophes and hyphens; numbers and other punctuation are not typing targets.
+Save or discard edits before switching items. The app does not autosave edits. Copy practice recognizes English letters (`A–Z`), including words with apostrophes and hyphens; numbers and other punctuation are not typing targets. In `articles.json`, `mode: "article"` means sentence splitting and `mode: "note"` means line splitting.
+
+### Quiz
+
+Choose `quiz`, create an item, and enter alternating lines of Chinese and English. Empty lines between pairs are optional:
+
+```text
+今天天气很好。
+The weather is nice today.
+
+我每天早上读书。
+I read every morning.
+```
+
+Practice shows one Chinese prompt at a time. Type the English answer: correct letters appear, completed words gain a space automatically, and a wrong letter shows `[wrong]`. Press `Ctrl+G` for the next letter. Case and punctuation between words are ignored; digits, apostrophes and hyphens within words must be typed. Quizzes also save incomplete progress and count completed runs.
+
+Quizzes are stored separately in `~/.wordflow/quizzes.json` (or alongside the configured article file). You can edit the file directly and use `reload` in the library. Each quiz needs a unique `id`, a `title`, and non-empty `pairs`; `group`, `completed_count`, `practice_index`, and `practice_word` are optional:
+
+```json
+[
+  {
+    "id": "daily-1",
+    "title": "Daily",
+    "pairs": [
+      {"zh": "今天天气很好。", "en": "The weather is nice today."}
+    ]
+  }
+]
+```
 
 ## Local data and sample content
 

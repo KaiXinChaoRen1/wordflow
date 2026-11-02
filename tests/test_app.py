@@ -6,10 +6,11 @@ These avoid pytest-asyncio by running each scenario with asyncio.run.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
-from wordflow.app import ArticleItem, GroupHeader, LibraryScreen, PracticeScreen, WordflowApp
+from wordflow.app import ArticleItem, GroupHeader, LibraryScreen, PracticeScreen, QuizPracticeScreen, WordflowApp
 from wordflow.storage import ArticleStore
 
 
@@ -68,10 +69,37 @@ def test_save_creates_article_and_lists_it(store_path):
     run(scenario)
 
 
+def test_library_and_editor_are_separate_views(store_path):
+    async def scenario(app, pilot):
+        lib = app.screen
+        assert lib.query_one("#library-sidebar").display
+        assert not lib.query_one("#editor-card").display
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert not lib.query_one("#library-sidebar").display
+        assert lib.query_one("#editor-card").display
+        lib.query_one("#editor-title").value = "One"
+        lib.query_one("#article-body").text = "Hello."
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert lib.query_one("#library-sidebar").display
+        assert not lib.query_one("#editor-card").display
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        assert lib.query_one("#editor-card").display
+        await pilot.press("escape")
+        await pilot.pause()
+        assert lib.query_one("#library-sidebar").display
+
+    run(scenario)
+
+
 def test_editing_existing_article_can_be_saved(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "A", "Hello world.")
         lib.load_article(lib.articles[0])
+        await pilot.press("ctrl+e")
         await pilot.pause()
         assert lib.query_one("#action-save").display is True
         assert not lib.editor_is_dirty()
@@ -142,18 +170,18 @@ def test_memo_save_allows_empty_title(store_path):
     run(scenario)
 
 
-def test_filter_separates_articles_and_memos(store_path):
+def test_copy_list_includes_articles_and_memos(store_path):
     async def scenario(app, pilot):
         await make_article(pilot, app, "Art", "Hello world.", mode="article")
         lib = await make_article(pilot, app, "Memo", "a note", mode="note")
 
         lib.set_filter("article")
         await pilot.pause()
-        assert [a.title for a in lib.filtered_articles()] == ["Art"]
+        assert [a.title for a in lib.filtered_articles()] == ["Art", "Memo"]
 
-        lib.set_filter("note")
+        lib.set_filter("quiz")
         await pilot.pause()
-        assert [a.title for a in lib.filtered_articles()] == ["Memo"]
+        assert lib.filtered_articles() == []
 
     run(scenario)
 
@@ -371,8 +399,9 @@ def test_arrow_keys_preview_and_enter_starts_practice(store_path):
 
         # After saving, "Two" is the highlighted row; move up to "One".
         list_view = lib.query_one("#article-list")
-        list_view.focus()
+        await pilot.press("ctrl+l")
         await pilot.pause()
+        assert app.focused is list_view
 
         await pilot.press("up")
         await pilot.pause()
@@ -410,6 +439,196 @@ def test_keyboard_shortcuts_new_and_save(store_path):
     run(scenario)
 
 
+def test_new_copy_defaults_to_sentence_and_can_use_lines(store_path):
+    async def scenario(app, pilot):
+        lib = app.screen
+        await pilot.click("#action-new")
+        await pilot.pause()
+        assert lib.current_mode == "article"
+        await pilot.click("#split-line")
+        await pilot.pause()
+        lib.query_one("#article-body").text = "A memo"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert lib.articles[0].mode == "note"
+
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert lib.is_creating_new
+        assert lib.current_mode == "article"
+
+    run(scenario)
+
+
+def test_copy_split_change_preserves_body_and_updates_practice(store_path):
+    async def scenario(app, pilot):
+        body = "Alpha. Beta.\nGamma!"
+        lib = await make_article(pilot, app, "Lines", body, mode="note")
+        assert lib.current_filter == "article"
+        assert lib.articles[0].sentences == ["Alpha. Beta.", "Gamma!"]
+        lib.handle_start()
+        await pilot.pause()
+        assert app.screen.article.mode == "note"
+        await pilot.press("escape")
+        await pilot.pause()
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.click("#split-sentence")
+        await pilot.pause()
+        assert lib.editor_is_dirty()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert lib.editing
+        assert status_text(lib) == "[unsaved] save or discard"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        stored = ArticleStore(store_path).load_articles()[0]
+        assert stored.mode == "article"
+        assert stored.body == body
+        assert stored.sentences == ["Alpha.", "Beta.", "Gamma!"]
+        lib.handle_start()
+        await pilot.pause()
+        assert app.screen.article.sentences == ["Alpha.", "Beta.", "Gamma!"]
+
+    run(scenario)
+
+
+def test_quiz_input_practice_resume_and_completion(store_path):
+    async def scenario(app, pilot):
+        lib = app.screen
+        await pilot.click("#filter-quiz")
+        await pilot.click("#action-new")
+        lib.query_one("#editor-title").value = "Daily"
+        lib.query_one("#article-body").text = "你好\nHi there.\n\n我赢了\nI win."
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        data = json.loads(store_path.with_name("quizzes.json").read_text())
+        assert data[0]["pairs"] == [{"zh": "你好", "en": "Hi there."}, {"zh": "我赢了", "en": "I win."}]
+        assert not store_path.exists()
+        lib.handle_start()
+        await pilot.pause()
+        practice = app.screen
+        assert isinstance(practice, QuizPracticeScreen)
+        assert str(practice.query_one("#sentence-0").renderable) == "你好"
+        assert not practice.query_one("#sentence-1").display
+        await pilot.press("x")
+        await pilot.pause()
+        assert message_text(practice) == "[wrong]"
+        assert practice.query_one("#word-input").value == ""
+        await pilot.press("ctrl+g")
+        await pilot.pause()
+        assert message_text(practice) == "[hint] next -> H"
+        await pilot.press("h", "i")
+        await pilot.pause()
+        assert practice.query_one("#word-input").value == "Hi "
+        await pilot.press("escape")
+        await pilot.pause()
+        lib.handle_start()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.word_index == 1
+        for key in "there":
+            await pilot.press(key)
+        await pilot.pause()
+        assert str(app.screen.query_one("#sentence-1").renderable) == "我赢了"
+        for key in "iwin":
+            await pilot.press(key)
+        await pilot.pause()
+        assert app.screen.is_complete
+        data = json.loads(store_path.with_name("quizzes.json").read_text())
+        assert data[0]["completed_count"] == 1
+        assert data[0]["practice_index"] == 0
+        await pilot.press("x")
+        await pilot.pause()
+        assert next(a for a in lib.articles if a.mode == "quiz").completed_count == 1
+
+    run(scenario)
+
+
+def test_quiz_validation_and_external_reload(store_path):
+    async def scenario(app, pilot):
+        lib = app.screen
+        await pilot.click("#filter-quiz")
+        await pilot.click("#action-new")
+        lib.query_one("#editor-title").value = "Bad"
+        lib.query_one("#article-body").text = "你好\nHello\n再见"
+        await pilot.pause()
+        lib.handle_save()
+        await pilot.pause()
+        assert "line 3" in status_text(lib)
+        assert not store_path.with_name("quizzes.json").exists()
+        lib.cancel_new()
+        await pilot.pause()
+        store_path.with_name("quizzes.json").write_text(json.dumps([
+            {"id": "external", "title": "External", "pairs": [{"zh": "你好", "en": "Hello"}]}
+        ]), encoding="utf-8")
+        lib.handle_reload()
+        await pilot.pause()
+        assert [a.title for a in lib.filtered_articles()] == ["External"]
+
+    run(scenario)
+
+
+def test_line_copy_displays_chinese_and_practices_english(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "Daily", "你好\nHi.\n再见\nBye.", mode="note")
+        lib.handle_start()
+        await pilot.pause()
+        practice = app.screen
+        assert isinstance(practice, PracticeScreen)
+        assert str(practice.query_one("#sentence-0").renderable) == "你好"
+        assert practice.sentence_index == 1
+        await pilot.press("h", "i")
+        await pilot.pause()
+        assert practice.sentence_index == 3
+        assert str(practice.query_one("#sentence-2").renderable) == "再见"
+        await pilot.press("b", "y", "e")
+        await pilot.pause()
+        assert practice.is_complete
+
+    run(scenario)
+
+
+def test_unsaved_edits_are_preserved_until_saved_or_cancelled(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "One", "Original.")
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        lib.query_one("#article-body").text = "Changed."
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert lib.editing
+        assert lib.current_filter == "article"
+        assert lib.query_one("#article-body").text == "Changed."
+        assert status_text(lib) == "[unsaved] save or discard"
+
+        await pilot.click("#action-cancel-new")
+        await pilot.pause()
+        assert not lib.editing
+        assert lib.query_one("#article-body").text == "Original."
+        await pilot.click("#filter-quiz")
+        await pilot.pause()
+        assert lib.current_filter == "quiz"
+
+    run(scenario)
+
+
+def test_empty_library_rebuild_preserves_new_draft(store_path):
+    async def scenario(app, pilot):
+        lib = app.screen
+        lib.start_new_item("article")
+        lib.query_one("#editor-title").value = "Draft"
+        lib.query_one("#article-body").text = "Draft body."
+        await pilot.pause()
+        assert lib.query_one("#editor-title").value == "Draft"
+        assert lib.query_one("#article-body").text == "Draft body."
+
+    run(scenario)
+
+
 def test_ctrl_d_deletes_from_list(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Doomed", "Hello world.")
@@ -441,7 +660,7 @@ def test_ctrl_t_toggles_mode_filter(store_path):
         assert lib.current_filter == "article"
         await pilot.press("ctrl+t")
         await pilot.pause()
-        assert lib.current_filter == "note"
+        assert lib.current_filter == "quiz"
         await pilot.press("ctrl+t")
         await pilot.pause()
         assert lib.current_filter == "article"
@@ -555,6 +774,97 @@ def test_repeat_practice_with_r_key(store_path):
             await pilot.press(char)
         await pilot.pause()
         assert ArticleStore(store_path).load_articles()[0].completed_count == 2
+
+    run(scenario)
+
+
+def test_resume_or_restart_incomplete_practice(store_path):
+    async def scenario(app, pilot):
+        lib, practice = await start_practice(pilot, app, "Hi there. Next sentence.")
+        await pilot.press("H", "i")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        saved = ArticleStore(store_path).load_articles()[0]
+        assert (saved.practice_sentence, saved.practice_word) == (0, 1)
+
+        lib.handle_start()
+        await pilot.pause()
+        practice = app.screen
+        prompt = practice.query_one("#resume-prompt")
+        assert prompt.display
+        assert "Enter  Continue" in str(prompt.renderable)
+        assert "r  Start over" in str(prompt.renderable)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not prompt.display
+        assert practice.word_index == 1
+        assert practice.query_one("#word-input").value == "Hi "
+        await pilot.press("escape")
+        await pilot.pause()
+
+        lib.handle_start()
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        assert app.screen.word_index == 0
+        assert ArticleStore(store_path).load_articles()[0].practice_word == 0
+
+    run(scenario)
+
+
+def test_leaving_practice_keeps_library_list_intact(store_path, monkeypatch):
+    async def scenario(app, pilot):
+        lib, _ = await start_practice(pilot, app, "Hi there.")
+        list_view = lib.query_one("#article-list")
+        rows = list(list_view.children)
+        rebuilds = []
+        monkeypatch.setattr(lib, "refresh_article_list", lambda *args, **kwargs: rebuilds.append(True))
+        await pilot.press("H", "i", "escape")
+        await pilot.pause()
+        assert app.screen is lib
+        assert not rebuilds
+        assert list(list_view.children) == rows
+        assert lib.articles[0].practice_word == 1
+
+    run(scenario)
+
+
+def test_completed_practice_clears_saved_progress(store_path):
+    async def scenario(app, pilot):
+        lib, _ = await start_practice(pilot, app, "Hi there.")
+        for char in "Hithere":
+            await pilot.press(char)
+        await pilot.pause()
+        saved = ArticleStore(store_path).load_articles()[0]
+        assert saved.completed_count == 1
+        assert (saved.practice_sentence, saved.practice_word) == (0, 0)
+        await pilot.press("x")
+        await pilot.pause()
+        lib.handle_start()
+        await pilot.pause()
+        assert not app.screen.choosing_resume
+
+    run(scenario)
+
+
+def test_fourth_completion_shows_total_in_library(store_path):
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "Drill", "Hi.")
+        for _ in range(3):
+            lib.store.complete_article(lib.articles[0].article_id)
+        lib.refresh_articles_from_store()
+        await pilot.pause()
+        lib.handle_start()
+        await pilot.pause()
+        await pilot.press("H", "i")
+        await pilot.pause()
+        assert lib.store.load_articles()[0].completed_count == 4
+        await pilot.press("x")
+        await pilot.pause()
+        item = next(item for item in lib.query(ArticleItem))
+        assert str(item._label.renderable).endswith("●●● *4")
+        assert str(lib.query_one("#editor-completion").renderable) == "●●● *4"
 
     run(scenario)
 
