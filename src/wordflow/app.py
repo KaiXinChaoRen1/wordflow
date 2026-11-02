@@ -10,7 +10,6 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Click
-from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -54,6 +53,7 @@ class ArticleItem(ListItem):
     def __init__(self, article: Article) -> None:
         self.article = article
         self._label = Label(self._label_text(selected=False))
+        self._shown: tuple[bool, bool, int] = (False, False, article.completed_count)
         super().__init__(self._label)
 
     def _label_text(self, selected: bool, armed: bool = False) -> Text:
@@ -70,6 +70,13 @@ class ArticleItem(ListItem):
         )
 
     def set_selected(self, selected: bool, armed: bool = False) -> None:
+        # Called for every row on each highlight change. Label.update forces a
+        # full screen relayout, so rewriting ~100 unchanged rows per arrow key
+        # made held arrow keys lag and pile up. Only touch rows that changed.
+        shown = (selected, armed, self.article.completed_count)
+        if shown == self._shown:
+            return
+        self._shown = shown
         self._label.update(self._label_text(selected, armed))
 
 
@@ -135,9 +142,6 @@ class PracticeScreen(Screen[None]):
 
     BINDINGS = [("escape", "app.pop_screen", "Back")]
 
-    sentence_index = reactive(0)
-    word_index = reactive(0)
-
     def __init__(
         self,
         article: Article,
@@ -153,6 +157,9 @@ class PracticeScreen(Screen[None]):
         self.items = items
         self.store = store
         self.on_completed = on_completed
+        self.sentence_index = 0
+        self.word_index = 0
+        self.message = ""
         self.current_words = (
             extract_words(self.article.sentences[0]) if self.article.sentences else []
         )
@@ -230,6 +237,11 @@ class PracticeScreen(Screen[None]):
         self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
 
     def set_message(self, text: str | Text) -> None:
+        # Most keystrokes "clear" an already empty message; skipping those
+        # avoids an extra full-screen relayout per key (Static.update relayouts).
+        if text == self.message:
+            return
+        self.message = text
         self.query_one("#practice-message", Static).update(text)
 
     def refresh_article_view(self) -> None:
@@ -711,10 +723,6 @@ class LibraryScreen(Screen[None]):
     }
     """
 
-    selected_article_id: reactive[Optional[str]] = reactive(None)
-    current_mode: reactive[ContentMode] = reactive("article")
-    current_filter: reactive[ContentMode] = reactive("article")
-
     def __init__(self, store: ArticleStore) -> None:
         super().__init__()
         # Copy items and quizzes live in separate files. Both dicts are keyed
@@ -724,6 +732,9 @@ class LibraryScreen(Screen[None]):
             "article": store,
             "quiz": QuizStore(store.path.with_name("quizzes.json")),
         }
+        self.selected_article_id: Optional[str] = None
+        self.current_mode: ContentMode = "article"
+        self.current_filter: ContentMode = "article"
         self.items: dict[str, List[Article]] = {
             kind: kind_store.load_articles() for kind, kind_store in self.stores.items()
         }
@@ -796,12 +807,15 @@ class LibraryScreen(Screen[None]):
 
     async def rebuild_article_list(self) -> None:
         list_view = self.query_one("#article-list", ListView)
-        list_view.index = None
-        await list_view.clear()
-        visible_items = self.visible_list_items()
-        if visible_items:
-            await list_view.extend(visible_items)
-        self.reconcile_article_selection()
+        # Hold repaints until the new rows are in place; otherwise the emptied
+        # list is drawn for a frame or two, which shows up as a flash.
+        with self.app.batch_update():
+            list_view.index = None
+            await list_view.clear()
+            visible_items = self.visible_list_items()
+            if visible_items:
+                await list_view.extend(visible_items)
+            self.reconcile_article_selection()
 
     def visible_list_items(self) -> List[ListItem]:
         items: List[ListItem] = []

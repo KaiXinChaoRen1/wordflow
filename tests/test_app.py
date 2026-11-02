@@ -1017,3 +1017,29 @@ def test_typing_refreshes_only_current_sentence(store_path, monkeypatch):
         assert scrolls == [untouched]
 
     run(scenario)
+
+
+def test_moving_highlight_rewrites_only_changed_rows(store_path, monkeypatch):
+    async def scenario(app, pilot):
+        lib = None
+        for title in ("A", "B", "C"):
+            lib = await make_article(pilot, app, title, f"{title} body.")
+        lib.query_one("#article-list").focus()
+        rows = list(lib.query(ArticleItem))
+        assert [row.article.title for row in rows] == ["A", "B", "C"]
+        updates = []
+        for row in rows:
+            original = row._label.update
+            monkeypatch.setattr(
+                row._label, "update",
+                lambda value, row=row, original=original: (updates.append(row.article.title), original(value)),
+            )
+        lib.load_article(rows[0].article)
+        await pilot.pause()
+        updates.clear()
+        lib.load_article(rows[1].article)
+        await pilot.pause()
+        # Only the old and new selection change; "C" must not be rewritten.
+        assert sorted(updates) == ["A", "B"]
+
+    run(scenario)
