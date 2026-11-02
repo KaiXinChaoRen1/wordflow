@@ -141,15 +141,18 @@ class PracticeScreen(Screen[None]):
     def __init__(
         self,
         article: Article,
+        items: List[Article],
         store: ArticleStore,
         on_completed: Optional[Callable[[], None]] = None,
-        on_progress: Optional[Callable[[Article], None]] = None,
     ) -> None:
         super().__init__()
+        # `article` is an element of `items`, the library's own list. Practice
+        # updates it in place and saves the whole list, so the library sees
+        # progress without re-reading the file.
         self.article = article
+        self.items = items
         self.store = store
         self.on_completed = on_completed
-        self.on_progress = on_progress
         self.current_words = (
             extract_words(self.article.sentences[0]) if self.article.sentences else []
         )
@@ -157,7 +160,6 @@ class PracticeScreen(Screen[None]):
         self.active_sentence_index: Optional[int] = None
         self.is_complete = False
         self.choosing_resume = bool(article.practice_sentence or article.practice_word)
-        self.progress_changed = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="practice-root"):
@@ -188,10 +190,6 @@ class PracticeScreen(Screen[None]):
             return
         self.refresh_sentence()
         self.query_one("#word-input", Input).focus()
-
-    def on_unmount(self) -> None:
-        if self.progress_changed and self.on_progress is not None:
-            self.on_progress(self.article)
 
     def refresh_sentence(self) -> None:
         while self.sentence_index < len(self.article.sentences):
@@ -231,7 +229,7 @@ class PracticeScreen(Screen[None]):
     def show_wrong_input(self, target: str) -> None:
         self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
 
-    def set_message(self, text: str) -> None:
+    def set_message(self, text: str | Text) -> None:
         self.query_one("#practice-message", Static).update(text)
 
     def refresh_article_view(self) -> None:
@@ -342,11 +340,11 @@ class PracticeScreen(Screen[None]):
                 self.save_progress()
             return
 
-        self.save_progress()
         self.refresh_article_view()
         self.sync_input_value()
         input_widget.cursor_position = len(input_widget.value)
         self.set_message("[step] word complete")
+        self.save_progress()
 
     def on_key(self, event) -> None:
         if self.choosing_resume:
@@ -361,11 +359,12 @@ class PracticeScreen(Screen[None]):
             else:
                 self.sentence_index = 0
                 self.word_index = 0
-                self.save_progress()
             input_widget = self.query_one("#word-input", Input)
             input_widget.disabled = False
             self.refresh_sentence()
             input_widget.focus()
+            if event.key == "r":
+                self.save_progress()
             return
         if not self.is_complete:
             return
@@ -376,12 +375,20 @@ class PracticeScreen(Screen[None]):
             self.app.pop_screen()
 
     def save_progress(self) -> None:
-        self.store.save_practice_progress(
-            self.article.article_id, self.sentence_index, self.word_index
-        )
         self.article.practice_sentence = self.sentence_index
         self.article.practice_word = self.word_index
-        self.progress_changed = True
+        self.write_items()
+
+    def write_items(self) -> bool:
+        """Save the library's list. On failure (usually the file was edited
+        outside the app) stop typing and show the reason; Esc goes back."""
+        try:
+            self.store.save_articles(self.items)
+        except ValueError as error:
+            self.query_one("#word-input", Input).disabled = True
+            self.set_message(Text(f"[invalid] {error}"))
+            return False
+        return True
 
     def restart_practice(self) -> None:
         self.is_complete = False
@@ -389,11 +396,11 @@ class PracticeScreen(Screen[None]):
         self.sentence_index = 0
         self.word_index = 0
         self.current_prefix = ""
-        self.save_progress()
         input_widget = self.query_one("#word-input", Input)
         input_widget.disabled = False
         self.refresh_sentence()
         input_widget.focus()
+        self.save_progress()
 
     def finish_article(self) -> None:
         if self.is_complete:
@@ -411,14 +418,11 @@ class PracticeScreen(Screen[None]):
         self.refresh_progress()
         self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  r repeat · any key back")
 
-        completed_article = self.store.complete_article(self.article.article_id)
-        if completed_article is not None:
-            self.article.completed_count = completed_article.completed_count
-            self.article.practice_sentence = 0
-            self.article.practice_word = 0
-            self.progress_changed = False
-            if self.on_completed is not None:
-                self.on_completed()
+        self.article.completed_count += 1
+        self.article.practice_sentence = 0
+        self.article.practice_word = 0
+        if self.write_items() and self.on_completed is not None:
+            self.on_completed()
 
 
 class QuizPracticeScreen(PracticeScreen):
@@ -713,9 +717,16 @@ class LibraryScreen(Screen[None]):
 
     def __init__(self, store: ArticleStore) -> None:
         super().__init__()
-        self.store = store
-        self.quiz_store = QuizStore(store.path.with_name("quizzes.json"))
-        self.articles: List[Article] = self.store.load_articles() + self.quiz_store.load_articles()
+        # Copy items and quizzes live in separate files. Both dicts are keyed
+        # by `current_filter` ("article" = Copy tab, "quiz" = Quiz tab), so the
+        # active tab alone decides which list and file an action touches.
+        self.stores: dict[str, ArticleStore] = {
+            "article": store,
+            "quiz": QuizStore(store.path.with_name("quizzes.json")),
+        }
+        self.items: dict[str, List[Article]] = {
+            kind: kind_store.load_articles() for kind, kind_store in self.stores.items()
+        }
         self.is_creating_new = False
         self.previous_selected_article_id: Optional[str] = None
         self.previous_filter: ContentMode = "article"
@@ -1004,9 +1015,7 @@ class LibraryScreen(Screen[None]):
     def grouped_articles(self) -> List[tuple[str, List[Article]]]:
         groups: List[str] = []
         grouped: dict[str, List[Article]] = {}
-        for article in self.articles:
-            if not self.matches_filter(article):
-                continue
+        for article in self.current_items():
             if article.group not in grouped:
                 groups.append(article.group)
                 grouped[article.group] = []
@@ -1016,8 +1025,13 @@ class LibraryScreen(Screen[None]):
             for group in groups
         ]
 
-    def matches_filter(self, article: Article) -> bool:
-        return (article.mode == "quiz") == (self.current_filter == "quiz")
+    def current_items(self) -> List[Article]:
+        return self.items[self.current_filter]
+
+    def selected_item(self) -> Optional[Article]:
+        return next(
+            (a for a in self.current_items() if a.article_id == self.selected_article_id), None
+        )
 
     def set_filter(self, mode: ContentMode) -> None:
         if mode == self.current_filter:
@@ -1040,7 +1054,7 @@ class LibraryScreen(Screen[None]):
         self.current_mode = mode
         self.current_filter = "quiz" if mode == "quiz" else "article"
         self.selected_article_id = None
-        new_title = self.store.default_note_title() if mode == "note" else ""
+        new_title = self.stores["article"].default_note_title() if mode == "note" else ""
         new_group = DEFAULT_GROUP
         self.query_one("#editor-title", Input).value = new_title
         self.query_one("#editor-group", Input).value = new_group
@@ -1203,9 +1217,7 @@ class LibraryScreen(Screen[None]):
 
     def cancel_new(self) -> None:
         if not self.is_creating_new:
-            article = next(
-                (a for a in self.articles if self.matches_filter(a) and a.article_id == self.selected_article_id), None
-            )
+            article = self.selected_item()
             if article is not None:
                 self.load_article(article)
             else:
@@ -1223,7 +1235,7 @@ class LibraryScreen(Screen[None]):
         self.show_editor(False)
 
     def open_settings(self) -> None:
-        self.app.push_screen(ImportArticlesScreen(self.store))
+        self.app.push_screen(ImportArticlesScreen(self.stores["article"]))
 
     def handle_save(self) -> None:
         title = self.query_one("#editor-title", Input).value.strip()
@@ -1240,30 +1252,22 @@ class LibraryScreen(Screen[None]):
 
         # Display-only sentence breaks must not rewrite the stored original.
         if body == self.loaded_body:
-            original = next(
-                (a for a in self.articles if (a.mode == "quiz") == (self.current_mode == "quiz") and a.article_id == self.selected_article_id), None
-            )
+            original = self.selected_item()
             if original is not None:
                 body = original.body
 
         target_article_id = self.selected_article_id or str(uuid4())
-        store = self.quiz_store if self.current_mode == "quiz" else self.store
-        selected = [a for a in self.articles if (a.mode == "quiz") == (self.current_mode == "quiz")]
         try:
-            updated_articles = store.upsert_article(
-                selected, title=title, body=body, mode=self.current_mode,
+            self.items[self.current_filter] = self.stores[self.current_filter].upsert_article(
+                self.current_items(), title=title, body=body, mode=self.current_mode,
                 group=group, article_id=target_article_id,
             )
         except ValueError as error:
             self.set_status(f"[invalid] {error}")
             return
-        self.articles = [a for a in self.articles if (a.mode == "quiz") != (self.current_mode == "quiz")] + updated_articles
         self.is_creating_new = False
         self.selected_article_id = target_article_id
-        saved_article = next(
-            (article for article in self.articles if article.mode == self.current_mode and article.article_id == target_article_id),
-            None,
-        )
+        saved_article = self.selected_item()
         if saved_article is not None:
             self.current_mode = saved_article.mode
             self.expanded_groups.add(saved_article.group)
@@ -1290,14 +1294,13 @@ class LibraryScreen(Screen[None]):
             return
 
         self.pending_delete_id = None
-        store = self.quiz_store if self.current_filter == "quiz" else self.store
-        selected = [a for a in self.articles if (a.mode == "quiz") == (self.current_filter == "quiz")]
         try:
-            updated = store.delete_article(selected, self.selected_article_id)
+            self.items[self.current_filter] = self.stores[self.current_filter].delete_article(
+                self.current_items(), self.selected_article_id
+            )
         except ValueError as error:
             self.set_status(f"[invalid] {error}")
             return
-        self.articles = [a for a in self.articles if (a.mode == "quiz") != (self.current_filter == "quiz")] + updated
         self.selected_article_id = None
         self.refresh_article_list(announce_status=False)
         self.set_status("[removed] item")
@@ -1306,10 +1309,7 @@ class LibraryScreen(Screen[None]):
         if self.editing:
             self.set_status("[editing] save or back")
             return
-        article = next(
-            (item for item in self.articles if self.matches_filter(item) and item.article_id == self.selected_article_id),
-            None,
-        )
+        article = self.selected_item()
         if article is None:
             self.set_status("[missing] select an item")
             return
@@ -1318,22 +1318,22 @@ class LibraryScreen(Screen[None]):
             self.set_status("[invalid] empty")
             return
 
-        screen = QuizPracticeScreen if isinstance(article, Quiz) else PracticeScreen
-        store = self.quiz_store if isinstance(article, Quiz) else self.store
-        self.app.push_screen(screen(article, store, self.refresh_articles_from_store, self.sync_practice_progress))
-
-    def sync_practice_progress(self, practiced: Article) -> None:
-        for article in self.articles:
-            if article.mode == practiced.mode and article.article_id == practiced.article_id:
-                article.practice_sentence = practiced.practice_sentence
-                article.practice_word = practiced.practice_word
-                break
+        screen = QuizPracticeScreen if self.current_filter == "quiz" else PracticeScreen
+        # Practice mutates `article` inside this list and saves it; on
+        # completion the rows are rebuilt so the dots update.
+        self.app.push_screen(
+            screen(article, self.current_items(), self.stores[self.current_filter], self.refresh_article_list)
+        )
 
     def refresh_articles_from_store(self, announce_status: bool = True) -> None:
-        selected_article_id = self.selected_article_id
-        self.articles = self.store.load_articles() + self.quiz_store.load_articles()
-        self.selected_article_id = selected_article_id
-        self.refresh_article_list(announce_status=announce_status)
+        # Assign each list right after its own load: load_articles also resets
+        # that store's snapshot, so list and snapshot must change together even
+        # if the other file turns out to be invalid and raises.
+        try:
+            for kind, kind_store in self.stores.items():
+                self.items[kind] = kind_store.load_articles()
+        finally:
+            self.refresh_article_list(announce_status=announce_status)
 
 
 class WordflowApp(App[None]):

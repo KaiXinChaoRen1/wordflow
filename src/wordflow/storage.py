@@ -1,4 +1,18 @@
-"""Persistent storage for Wordflow articles."""
+"""Persistent storage for Wordflow articles and quizzes.
+
+Each store owns one JSON file. Two rules hold for both files:
+
+- Loading is strict: a record with a missing or wrong-typed field raises a
+  ValueError naming the file, item number, and field, instead of being
+  silently repaired.
+- Saving refuses to overwrite edits made outside the app. The store remembers
+  the file bytes from its last load/save (`snapshot`); if the file differs at
+  save time, the save raises and the user must reload first.
+
+The app keeps the loaded list in memory and passes the whole list back to
+`save_articles`. Stores never re-read the file inside a save, because that
+would refresh `snapshot` and hide external edits from the in-memory list.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +22,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Callable, List, Literal, Optional
 from uuid import uuid4
 
 from .parsing import extract_words, parse_quiz, quiz_words, split_lines, split_sentences
@@ -57,86 +71,122 @@ def _default_storage_path() -> Path:
         return fallback
 
 
+def _string_field(record: dict, key: str) -> str:
+    """Optional string field; missing means empty."""
+    value = record.get(key, "")
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value.strip()
+
+
+def _count_field(record: dict, key: str) -> int:
+    value = record.get(key, 0)
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"{key} must be a non-negative integer")
+    return value
+
+
+def _check_practice_position(
+    segment: object, word: object, segments: List[str], words_of: Callable[[str], List[str]]
+) -> None:
+    """Saved progress must point at an existing word; (0, 0) means "from the start"."""
+    if not isinstance(segment, int) or not isinstance(word, int):
+        raise ValueError("practice position must be integers")
+    if (segment, word) == (0, 0):
+        return
+    if not 0 <= segment < len(segments) or not 0 <= word < len(words_of(segments[segment])):
+        raise ValueError(f"practice position (segment {segment}, word {word}) is outside the text")
+
+
 class ArticleStore:
-    """Load and save articles from a local JSON file."""
+    """Copy-practice records in articles.json."""
+
+    kind = "article"
 
     def __init__(self, path: Optional[Path] = None) -> None:
         self.path = path or _default_storage_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # File bytes as of our last load/save; None means "no file yet".
+        self.snapshot: Optional[bytes] = None
 
     def load_articles(self) -> List[Article]:
         if not self.path.exists():
+            self.snapshot = None
             return []
-
+        data = self.path.read_bytes()
         try:
-            with self.path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+            payload = json.loads(data)
         except json.JSONDecodeError as error:
             raise ValueError(
-                f"invalid JSON in article data {self.path} "
+                f"invalid JSON in {self.kind} data {self.path} "
                 f"(line {error.lineno}, column {error.colno})"
             ) from error
-
         if not isinstance(payload, list):
-            raise ValueError(f"article data must be a JSON array: {self.path}")
+            raise ValueError(f"{self.kind} data must be a JSON array: {self.path}")
 
-        articles = []
-        for index, item in enumerate(payload):
-            if not isinstance(item, dict):
-                raise ValueError(
-                    f"article data item {index} must be an object: {self.path}"
-                )
-            mode = self.normalize_mode(str(item.get("mode", "article")))
-            article_id = str(item.get("article_id") or uuid4())
-            title = str(item.get("title", "")).strip()
-            body = str(item.get("body", "")).strip()
-            group = str(item.get("group", "")).strip() or DEFAULT_GROUP
-            if mode == "note" and not title:
-                title = self.default_note_title()
+        items: List[Article] = []
+        seen_ids = set()
+        for number, record in enumerate(payload, 1):
+            try:
+                if not isinstance(record, dict):
+                    raise ValueError("expected object")
+                item = self.parse_record(record)
+                if item.article_id in seen_ids:
+                    raise ValueError(f"duplicate id {item.article_id!r}")
+            except ValueError as error:
+                raise ValueError(f"invalid {self.kind} in {self.path}, item {number}: {error}") from error
+            seen_ids.add(item.article_id)
+            items.append(item)
+        # Only a fully valid load becomes the baseline for the next save.
+        self.snapshot = data
+        return items
 
-            raw_sentences = item.get("sentences")
-            if isinstance(raw_sentences, list):
-                sentences = [
-                    str(sentence).strip()
-                    for sentence in raw_sentences
-                    if str(sentence).strip()
-                ]
-            else:
-                sentences = self.build_segments(body, mode)
+    def parse_record(self, record: dict) -> Article:
+        article_id = record.get("article_id")
+        if not isinstance(article_id, str) or not article_id.strip():
+            raise ValueError("article_id must be a non-empty string")
+        mode = record.get("mode", "article")
+        if mode not in ("article", "note"):
+            raise ValueError(f"mode must be 'article' or 'note', got {mode!r}")
+        title = _string_field(record, "title")
+        body = _string_field(record, "body")
+        group = _string_field(record, "group") or DEFAULT_GROUP
+        if mode == "note" and not title:
+            title = self.default_note_title()
 
-            completed_count = item.get("completed_count", 0)
-            if not isinstance(completed_count, int):
-                try:
-                    completed_count = int(completed_count)
-                except (ValueError, TypeError):
-                    completed_count = 0
-            completed_count = max(0, completed_count)
-            sentence_index = item.get("practice_sentence", 0)
-            word_index = item.get("practice_word", 0)
-            if not isinstance(sentence_index, int) or not 0 <= sentence_index < len(sentences):
-                sentence_index = 0
-                word_index = 0
-            words = extract_words(sentences[sentence_index]) if sentences else []
-            if not isinstance(word_index, int) or not 0 <= word_index < len(words):
-                word_index = 0
+        raw_sentences = record.get("sentences")
+        if raw_sentences is None:
+            sentences = self.build_segments(body, mode)
+        elif isinstance(raw_sentences, list) and all(isinstance(s, str) for s in raw_sentences):
+            sentences = [s.strip() for s in raw_sentences if s.strip()]
+        else:
+            raise ValueError("sentences must be an array of strings")
 
-            articles.append(
-                Article(
-                    article_id=article_id,
-                    title=title,
-                    body=body,
-                    mode=mode,
-                    group=group,
-                    sentences=sentences,
-                    completed_count=completed_count,
-                    practice_sentence=sentence_index,
-                    practice_word=word_index,
-                )
-            )
-        return articles
+        practice_sentence = record.get("practice_sentence", 0)
+        practice_word = record.get("practice_word", 0)
+        _check_practice_position(practice_sentence, practice_word, sentences, extract_words)
+        return Article(
+            article_id=article_id,
+            title=title,
+            body=body,
+            mode=mode,
+            group=group,
+            sentences=sentences,
+            completed_count=_count_field(record, "completed_count"),
+            practice_sentence=practice_sentence,
+            practice_word=practice_word,
+        )
+
+    def to_record(self, article: Article) -> dict:
+        return asdict(article)
 
     def save_articles(self, articles: List[Article]) -> None:
-        payload = [asdict(article) for article in articles]
+        current = self.path.read_bytes() if self.path.exists() else None
+        if current != self.snapshot:
+            raise ValueError(f"{self.kind} data changed on disk; reload: {self.path}")
+        payload = [self.to_record(article) for article in articles]
+        # Write to a temp file and rename, so a crash mid-write never leaves
+        # a truncated data file behind.
         temporary_path = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -145,6 +195,7 @@ class ArticleStore:
                 temporary_path = Path(handle.name)
                 json.dump(payload, handle, ensure_ascii=False, indent=2)
             os.replace(temporary_path, self.path)
+            self.snapshot = self.path.read_bytes()
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
@@ -158,49 +209,31 @@ class ArticleStore:
         group: str = DEFAULT_GROUP,
         article_id: Optional[str] = None,
     ) -> List[Article]:
+        if mode not in ("article", "note"):
+            raise ValueError(f"unknown article mode: {mode}")
         cleaned_title = title.strip()
         cleaned_body = body.strip()
-        cleaned_group = group.strip() or DEFAULT_GROUP
-        normalized_mode = self.normalize_mode(mode)
-        if normalized_mode == "note" and not cleaned_title:
+        if mode == "note" and not cleaned_title:
             cleaned_title = self.default_note_title()
-        sentences = self.build_segments(cleaned_body, normalized_mode)
 
-        existing_completed_count = 0
-        practice_sentence = 0
-        practice_word = 0
-        if article_id:
-            for article in articles:
-                if article.article_id == article_id:
-                    existing_completed_count = article.completed_count
-                    if article.body == cleaned_body and article.mode == normalized_mode:
-                        practice_sentence = article.practice_sentence
-                        practice_word = article.practice_word
-                    break
-
+        previous = next((a for a in articles if a.article_id == article_id), None)
+        # Progress points into the old segments, so it only survives when the
+        # text and split rule are unchanged.
+        same_text = previous is not None and previous.body == cleaned_body and previous.mode == mode
         article = Article(
             article_id=article_id or str(uuid4()),
             title=cleaned_title,
             body=cleaned_body,
-            mode=normalized_mode,
-            group=cleaned_group,
-            sentences=sentences,
-            completed_count=existing_completed_count,
-            practice_sentence=practice_sentence,
-            practice_word=practice_word,
+            mode=mode,
+            group=group.strip() or DEFAULT_GROUP,
+            sentences=self.build_segments(cleaned_body, mode),
+            completed_count=previous.completed_count if previous else 0,
+            practice_sentence=previous.practice_sentence if same_text else 0,
+            practice_word=previous.practice_word if same_text else 0,
         )
-
-        updated = []
-        replaced = False
-        for current in articles:
-            if current.article_id == article.article_id:
-                updated.append(article)
-                replaced = True
-            else:
-                updated.append(current)
-        if not replaced:
+        updated = [article if a.article_id == article.article_id else a for a in articles]
+        if previous is None:
             updated.append(article)
-
         self.save_articles(updated)
         return updated
 
@@ -209,139 +242,92 @@ class ArticleStore:
         self.save_articles(updated)
         return updated
 
-    def complete_article(self, article_id: str) -> Optional[Article]:
-        articles = self.load_articles()
-        completed = None
-        for article in articles:
-            if article.article_id == article_id:
-                article.completed_count += 1
-                article.practice_sentence = 0
-                article.practice_word = 0
-                completed = article
-                break
-        if completed is not None:
-            self.save_articles(articles)
-        return completed
-
-    def save_practice_progress(self, article_id: str, sentence: int, word: int) -> None:
-        articles = self.load_articles()
-        for article in articles:
-            if article.article_id == article_id:
-                article.practice_sentence = sentence
-                article.practice_word = word
-                self.save_articles(articles)
-                return
-        raise ValueError(f"article not found: {article_id}")
-
-    def build_segments(self, body: str, mode: ContentMode) -> List[str]:
-        normalized_mode = self.normalize_mode(mode)
-        if normalized_mode == "note":
-            return split_lines(body)
-        return split_sentences(body)
-
-    def normalize_mode(self, mode: str) -> ContentMode:
-        return "note" if mode == "note" else "article"
+    def build_segments(self, body: str, mode: str) -> List[str]:
+        return split_lines(body) if mode == "note" else split_sentences(body)
 
     def default_note_title(self) -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class QuizStore(ArticleStore):
-    """Store quizzes separately using explicit Chinese/English pairs."""
+    """Chinese/English pairs in quizzes.json; `sentences` holds the English answers."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
-        super().__init__(path)
-        self.snapshot: Optional[bytes] = None
+    kind = "quiz"
 
-    def load_articles(self) -> List[Article]:
-        if not self.path.exists():
-            self.snapshot = None
-            return []
-        try:
-            data = self.path.read_bytes()
-            payload = json.loads(data)
-        except json.JSONDecodeError as error:
-            raise ValueError(f"invalid JSON in quiz data {self.path} (line {error.lineno}, column {error.colno})") from error
-        if not isinstance(payload, list):
-            raise ValueError(f"quiz data must be a JSON array: {self.path}")
-        result: List[Article] = []
-        ids = set()
-        for index, item in enumerate(payload, 1):
+    def parse_record(self, record: dict) -> Article:
+        quiz_id = record.get("id")
+        title = record.get("title")
+        pairs = record.get("pairs")
+        if not isinstance(quiz_id, str) or not quiz_id.strip():
+            raise ValueError("id must be a non-empty string")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("missing title")
+        if not isinstance(pairs, list) or not pairs:
+            raise ValueError("pairs must be a non-empty array")
+        for number, pair in enumerate(pairs, 1):
+            if not isinstance(pair, dict) or not all(isinstance(pair.get(key), str) for key in ("zh", "en")):
+                raise ValueError(f"pair {number}: expected zh and en strings")
+            if any(mark in pair[key] for key in ("zh", "en") for mark in ("\n", "\r")):
+                raise ValueError(f"pair {number}: each field must be one line")
             try:
-                if not isinstance(item, dict):
-                    raise ValueError("expected object")
-                quiz_id = item.get("id")
-                title = item.get("title")
-                pairs = item.get("pairs")
-                if not isinstance(quiz_id, str) or not quiz_id.strip() or quiz_id in ids:
-                    raise ValueError("id must be a unique non-empty string")
-                if not isinstance(title, str) or not title.strip():
-                    raise ValueError("missing title")
-                if not isinstance(pairs, list) or not pairs:
-                    raise ValueError("pairs must be a non-empty array")
-                for number, pair in enumerate(pairs, 1):
-                    if not isinstance(pair, dict) or not all(isinstance(pair.get(key), str) for key in ("zh", "en")):
-                        raise ValueError(f"pair {number}: expected zh and en strings")
-                    if '\n' in pair['zh'] or '\n' in pair['en'] or '\r' in pair['zh'] or '\r' in pair['en']:
-                        raise ValueError(f"pair {number}: each field must be one line")
-                    try:
-                        parse_quiz(pair['zh'] + '\n' + pair['en'])
-                    except ValueError as error:
-                        raise ValueError(f"pair {number}: {error}") from error
-                group = item.get("group", DEFAULT_GROUP)
-                if not isinstance(group, str):
-                    raise ValueError("group must be a string")
-                count = item.get("completed_count", 0)
-                sentence = item.get("practice_index", 0)
-                word = item.get("practice_word", 0)
-                if not isinstance(count, int) or count < 0:
-                    raise ValueError("invalid completed_count")
-                if not isinstance(sentence, int) or not 0 <= sentence < len(pairs):
-                    raise ValueError("invalid practice_index")
-                if not isinstance(word, int) or not 0 <= word < len(quiz_words(pairs[sentence]['en'])):
-                    raise ValueError("invalid practice_word")
-                ids.add(quiz_id)
-                clean_pairs = [{"zh": p['zh'].strip(), "en": p['en'].strip()} for p in pairs]
-                body = '\n'.join(f"{p['zh']}\n{p['en']}" for p in clean_pairs)
-                result.append(Quiz(quiz_id, title.strip(), body, "quiz", group.strip() or DEFAULT_GROUP,
-                                   [p['en'] for p in clean_pairs], count, sentence, word, clean_pairs))
+                parse_quiz(pair["zh"] + "\n" + pair["en"])
             except ValueError as error:
-                raise ValueError(f"invalid quiz in {self.path}, item {index}: {error}") from error
-        self.snapshot = data
-        return result
+                raise ValueError(f"pair {number}: {error}") from error
 
-    def save_articles(self, articles: List[Article]) -> None:
-        current = self.path.read_bytes() if self.path.exists() else None
-        if current != self.snapshot:
-            raise ValueError(f"quiz data changed on disk; reload: {self.path}")
-        payload = [{"id": a.article_id, "title": a.title, "group": a.group,
-                    "pairs": a.pairs, "completed_count": a.completed_count,
-                    "practice_index": a.practice_sentence, "practice_word": a.practice_word}
-                   for a in articles if isinstance(a, Quiz)]
-        temporary_path = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, delete=False) as handle:
-                temporary_path = Path(handle.name)
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
-            os.replace(temporary_path, self.path)
-            self.snapshot = self.path.read_bytes()
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+        clean_pairs = [{"zh": p["zh"].strip(), "en": p["en"].strip()} for p in pairs]
+        answers = [p["en"] for p in clean_pairs]
+        practice_index = record.get("practice_index", 0)
+        practice_word = record.get("practice_word", 0)
+        _check_practice_position(practice_index, practice_word, answers, quiz_words)
+        return Quiz(
+            article_id=quiz_id,
+            title=title.strip(),
+            body=self.pairs_body(clean_pairs),
+            mode="quiz",
+            group=_string_field(record, "group") or DEFAULT_GROUP,
+            sentences=answers,
+            completed_count=_count_field(record, "completed_count"),
+            practice_sentence=practice_index,
+            practice_word=practice_word,
+            pairs=clean_pairs,
+        )
+
+    def to_record(self, article: Article) -> dict:
+        assert isinstance(article, Quiz), f"QuizStore cannot save {article!r}"
+        return {
+            "id": article.article_id,
+            "title": article.title,
+            "group": article.group,
+            "pairs": article.pairs,
+            "completed_count": article.completed_count,
+            "practice_index": article.practice_sentence,
+            "practice_word": article.practice_word,
+        }
 
     def upsert_article(self, articles: List[Article], title: str, body: str,
                        mode: ContentMode = "quiz", group: str = DEFAULT_GROUP,
                        article_id: Optional[str] = None) -> List[Article]:
         pairs = parse_quiz(body)
         previous = next((a for a in articles if a.article_id == article_id), None)
-        canonical_body = '\n'.join(f"{p['zh']}\n{p['en']}" for p in pairs)
-        same = previous is not None and previous.body == canonical_body
-        quiz = Quiz(article_id or str(uuid4()), title.strip(), canonical_body, "quiz",
-                    group.strip() or DEFAULT_GROUP, [p['en'] for p in pairs],
-                    previous.completed_count if previous else 0,
-                    previous.practice_sentence if same else 0, previous.practice_word if same else 0, pairs)
+        body = self.pairs_body(pairs)
+        same_text = previous is not None and previous.body == body
+        quiz = Quiz(
+            article_id=article_id or str(uuid4()),
+            title=title.strip(),
+            body=body,
+            mode="quiz",
+            group=group.strip() or DEFAULT_GROUP,
+            sentences=[p["en"] for p in pairs],
+            completed_count=previous.completed_count if previous else 0,
+            practice_sentence=previous.practice_sentence if same_text else 0,
+            practice_word=previous.practice_word if same_text else 0,
+            pairs=pairs,
+        )
         updated = [quiz if a.article_id == quiz.article_id else a for a in articles]
         if previous is None:
             updated.append(quiz)
         self.save_articles(updated)
         return updated
+
+    def pairs_body(self, pairs: List[dict[str, str]]) -> str:
+        return "\n".join(f"{p['zh']}\n{p['en']}" for p in pairs)

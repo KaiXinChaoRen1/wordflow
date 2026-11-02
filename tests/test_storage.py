@@ -32,7 +32,8 @@ def test_quiz_file_errors_identify_item_and_pair(tmp_path):
 def test_quiz_store_preserves_progress_for_name_edits(tmp_path):
     store = QuizStore(tmp_path / "quizzes.json")
     items = store.upsert_article([], "One", "你好\nHello world.", article_id="one")
-    store.save_practice_progress("one", 0, 1)
+    items[0].practice_word = 1
+    store.save_articles(items)
     items = store.upsert_article(store.load_articles(), "Renamed", items[0].body, article_id="one")
     assert items[0].practice_word == 1
     items = store.upsert_article(items, "Renamed", "你好\nHello friend.", article_id="one")
@@ -159,42 +160,50 @@ def test_load_articles_rejects_non_list_payload_and_bad_items(tmp_path):
         ArticleStore(path).load_articles()
 
     path.write_text(json.dumps(["string", 5, {"title": "ok", "body": "Hi."}]), encoding="utf-8")
-    with pytest.raises(ValueError, match="item 0 must be an object"):
+    with pytest.raises(ValueError, match="item 1: expected object"):
         ArticleStore(path).load_articles()
 
 
-def test_load_articles_normalizes_unknown_mode_to_article(tmp_path):
+@pytest.mark.parametrize(
+    "record, message",
+    [
+        ({"title": "A", "body": "X."}, "item 1: article_id must be a non-empty string"),
+        ({"article_id": "1", "body": "X.", "mode": "memo"}, "item 1: mode must be 'article' or 'note'"),
+        ({"article_id": "1", "body": "X.", "completed_count": "2"}, "item 1: completed_count must be"),
+        ({"article_id": "1", "body": "X.", "completed_count": -4}, "item 1: completed_count must be"),
+        ({"article_id": "1", "body": 5}, "item 1: body must be a string"),
+        ({"article_id": "1", "body": "One two.", "practice_word": 5}, r"item 1: practice position \(segment 0, word 5\)"),
+    ],
+)
+def test_load_articles_rejects_invalid_fields(tmp_path, record, message):
     path = tmp_path / "articles.json"
-    path.write_text(
-        json.dumps(
-            [{"article_id": "1", "title": "X", "body": "A.\nB.", "mode": "memo"}]
-        ),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps([record]), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        ArticleStore(path).load_articles()
 
+
+def test_load_articles_rejects_duplicate_ids(tmp_path):
+    path = tmp_path / "articles.json"
+    path.write_text(json.dumps([{"article_id": "1"}, {"article_id": "1"}]), encoding="utf-8")
+    with pytest.raises(ValueError, match="item 2: duplicate id '1'"):
+        ArticleStore(path).load_articles()
+
+
+def test_load_articles_keeps_counts_beyond_three(tmp_path):
+    path = tmp_path / "articles.json"
+    path.write_text(json.dumps([{"article_id": "1", "body": "X.", "completed_count": 9}]), encoding="utf-8")
+    assert ArticleStore(path).load_articles()[0].completed_count == 9
+
+
+def test_article_save_does_not_overwrite_external_changes(tmp_path):
+    path = tmp_path / "articles.json"
     store = ArticleStore(path)
-    articles = store.load_articles()
-
-    assert len(articles) == 1
-    assert articles[0].mode == "article"
-
-
-def test_load_articles_normalizes_completed_count(tmp_path):
-    path = tmp_path / "articles.json"
-    path.write_text(
-        json.dumps(
-            [
-                {"article_id": "1", "title": "A", "body": "X.", "completed_count": 9},
-                {"article_id": "2", "title": "B", "body": "X.", "completed_count": -4},
-                {"article_id": "3", "title": "C", "body": "X.", "completed_count": "2"},
-                {"article_id": "4", "title": "D", "body": "X.", "completed_count": "junk"},
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    counts = {a.article_id: a.completed_count for a in ArticleStore(path).load_articles()}
-    assert counts == {"1": 9, "2": 0, "3": 2, "4": 0}
+    items = store.upsert_article([], "One", "Hello.", article_id="one")
+    external = '[{"article_id": "two", "title": "External", "body": "Bye."}]'
+    path.write_text(external, encoding="utf-8")
+    with pytest.raises(ValueError, match="article data changed on disk; reload"):
+        store.save_articles(items)
+    assert path.read_text(encoding="utf-8") == external
 
 
 def test_load_articles_note_without_title_gets_default(tmp_path):
@@ -219,36 +228,15 @@ def test_load_articles_blank_group_gets_default(tmp_path):
     assert ArticleStore(path).load_articles()[0].group == "Ungrouped"
 
 
-def test_complete_article_updates_count_beyond_three(tmp_path):
-    store = ArticleStore(tmp_path / "articles.json")
-    articles = store.upsert_article([], title="A", body="One.", mode="article", article_id="1")
-    articles[0].completed_count = 2
-    store.save_articles(articles)
-
-    completed = store.complete_article("1")
-    assert completed is not None
-    assert completed.completed_count == 3
-
-    completed = store.complete_article("1")
-    assert completed is not None
-    assert completed.completed_count == 4
-
-
 def test_editing_body_resets_progress_but_renaming_preserves_it(tmp_path):
     store = ArticleStore(tmp_path / "articles.json")
     articles = store.upsert_article([], title="A", body="One two.", article_id="1")
-    store.save_practice_progress("1", 0, 1)
+    articles[0].practice_word = 1
+    store.save_articles(articles)
     articles = store.upsert_article(store.load_articles(), title="B", body="One two.", article_id="1")
     assert articles[0].practice_word == 1
     articles = store.upsert_article(articles, title="B", body="Changed text.", article_id="1")
     assert (articles[0].practice_sentence, articles[0].practice_word) == (0, 0)
-
-
-def test_complete_article_missing_id_returns_none(tmp_path):
-    store = ArticleStore(tmp_path / "articles.json")
-    store.upsert_article([], title="A", body="One.", article_id="1")
-
-    assert store.complete_article("does-not-exist") is None
 
 
 def test_default_storage_path_uses_env_override(tmp_path, monkeypatch):

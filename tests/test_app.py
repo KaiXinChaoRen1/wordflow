@@ -61,10 +61,10 @@ async def make_article(pilot, app, title, body, mode="article", group=None):
 def test_save_creates_article_and_lists_it(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Greeting", "Hello world.")
-        assert len(lib.articles) == 1
+        assert len(lib.items["article"]) == 1
         assert status_text(lib) == "[saved]"
-        assert lib.articles[0].group == "Ungrouped"
-        assert lib.articles[0].sentences == ["Hello world."]
+        assert lib.items["article"][0].group == "Ungrouped"
+        assert lib.items["article"][0].sentences == ["Hello world."]
 
     run(scenario)
 
@@ -98,7 +98,7 @@ def test_library_and_editor_are_separate_views(store_path):
 def test_editing_existing_article_can_be_saved(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "A", "Hello world.")
-        lib.load_article(lib.articles[0])
+        lib.load_article(lib.items["article"][0])
         await pilot.press("ctrl+e")
         await pilot.pause()
         assert lib.query_one("#action-save").display is True
@@ -132,7 +132,7 @@ def test_save_requires_body(store_path):
         lib.handle_save()
         await pilot.pause()
         assert status_text(lib) == "[missing] body"
-        assert lib.articles == []
+        assert lib.items["article"] == []
 
     run(scenario)
 
@@ -148,7 +148,7 @@ def test_save_article_requires_title(store_path):
         lib.handle_save()
         await pilot.pause()
         assert status_text(lib) == "[missing] name"
-        assert lib.articles == []
+        assert lib.items["article"] == []
 
     run(scenario)
 
@@ -162,10 +162,10 @@ def test_memo_save_allows_empty_title(store_path):
         lib.query_one("#article-body").text = "line one\nline two"
         lib.handle_save()
         await pilot.pause()
-        assert len(lib.articles) == 1
-        assert lib.articles[0].mode == "note"
-        assert lib.articles[0].group == "Ungrouped"
-        assert lib.articles[0].title  # default timestamp title
+        assert len(lib.items["article"]) == 1
+        assert lib.items["article"][0].mode == "note"
+        assert lib.items["article"][0].group == "Ungrouped"
+        assert lib.items["article"][0].title  # default timestamp title
 
     run(scenario)
 
@@ -265,13 +265,13 @@ def test_group_header_label_separates_name_and_count(store_path):
 def test_collapsing_selected_group_keeps_editor_preview(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "One", "Alpha.", group="Book 1")
-        lib.load_article(lib.articles[0])
+        lib.load_article(lib.items["article"][0])
         await pilot.pause()
 
         lib.toggle_group("Book 1")
         await pilot.pause()
 
-        assert lib.selected_article_id == lib.articles[0].article_id
+        assert lib.selected_article_id == lib.items["article"][0].article_id
         assert lib.query_one("#article-list").index == 0
         assert lib.query_one("#editor-title").value == "One"
         assert lib.query_one("#editor-group").value == "Book 1"
@@ -297,7 +297,7 @@ def test_selected_row_shows_marker(store_path):
     async def scenario(app, pilot):
         await make_article(pilot, app, "One", "Alpha.")
         lib = await make_article(pilot, app, "Two", "Beta.")
-        lib.load_article(lib.articles[0])
+        lib.load_article(lib.items["article"][0])
         await pilot.pause()
 
         markers = {}
@@ -339,16 +339,16 @@ def test_delete_requires_selection(store_path):
 def test_delete_needs_two_presses(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Doomed", "Hello world.")
-        lib.selected_article_id = lib.articles[0].article_id
+        lib.selected_article_id = lib.items["article"][0].article_id
 
         lib.handle_delete()  # first press only arms
         await pilot.pause()
-        assert len(lib.articles) == 1
+        assert len(lib.items["article"]) == 1
         assert status_text(lib) == "[confirm] press Del again"
 
         lib.handle_delete()  # second press deletes
         await pilot.pause()
-        assert lib.articles == []
+        assert lib.items["article"] == []
         assert status_text(lib) == "[removed] item"
 
     run(scenario)
@@ -359,19 +359,19 @@ def test_delete_confirmation_resets_when_selection_changes(store_path):
         await make_article(pilot, app, "Keep", "Alpha beta.")
         lib = await make_article(pilot, app, "Other", "Gamma delta.")
 
-        lib.selected_article_id = lib.articles[0].article_id
+        lib.selected_article_id = lib.items["article"][0].article_id
         lib.handle_delete()  # arm deletion of first
         await pilot.pause()
         assert status_text(lib) == "[confirm] press Del again"
 
         # switching to another article disarms the pending delete
-        lib.load_article(lib.articles[1])
+        lib.load_article(lib.items["article"][1])
         await pilot.pause()
         assert lib.pending_delete_id is None
 
         lib.handle_delete()  # only re-arms, does not delete
         await pilot.pause()
-        assert len(lib.articles) == 2
+        assert len(lib.items["article"]) == 2
 
     run(scenario)
 
@@ -382,7 +382,7 @@ def test_delete_confirmation_resets_when_selection_changes(store_path):
 def test_word_less_content_is_rejected_without_awarding_a_star(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Nums", "123. 456!")
-        lib.selected_article_id = lib.articles[0].article_id
+        lib.selected_article_id = lib.items["article"][0].article_id
         lib.handle_start()
         await pilot.pause()
         assert isinstance(app.screen, LibraryScreen)
@@ -433,7 +433,7 @@ def test_keyboard_shortcuts_new_and_save(store_path):
         await pilot.pause()
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert len(lib.articles) == 1
+        assert len(lib.items["article"]) == 1
         assert status_text(lib) == "[saved]"
 
     run(scenario)
@@ -450,7 +450,7 @@ def test_new_copy_defaults_to_sentence_and_can_use_lines(store_path):
         lib.query_one("#article-body").text = "A memo"
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert lib.articles[0].mode == "note"
+        assert lib.items["article"][0].mode == "note"
 
         await pilot.press("ctrl+n")
         await pilot.pause()
@@ -465,7 +465,7 @@ def test_copy_split_change_preserves_body_and_updates_practice(store_path):
         body = "Alpha. Beta.\nGamma!"
         lib = await make_article(pilot, app, "Lines", body, mode="note")
         assert lib.current_filter == "article"
-        assert lib.articles[0].sentences == ["Alpha. Beta.", "Gamma!"]
+        assert lib.items["article"][0].sentences == ["Alpha. Beta.", "Gamma!"]
         lib.handle_start()
         await pilot.pause()
         assert app.screen.article.mode == "note"
@@ -542,7 +542,43 @@ def test_quiz_input_practice_resume_and_completion(store_path):
         assert data[0]["practice_index"] == 0
         await pilot.press("x")
         await pilot.pause()
-        assert next(a for a in lib.articles if a.mode == "quiz").completed_count == 1
+        assert lib.items["quiz"][0].completed_count == 1
+
+    run(scenario)
+
+
+def test_external_quiz_edit_is_never_overwritten(store_path):
+    """Regression: practice used to reload the file inside each save, which
+    refreshed the change-on-disk baseline and let a later library save
+    silently overwrite quizzes added outside the app."""
+    quiz_path = store_path.with_name("quizzes.json")
+    quiz_path.write_text(json.dumps([{"id": "a", "title": "A", "pairs": [{"zh": "你好", "en": "hello world"}]}]))
+
+    async def scenario(app, pilot):
+        lib = app.screen
+        await pilot.click("#filter-quiz")
+        await pilot.pause()
+        data = json.loads(quiz_path.read_text())
+        data.append({"id": "b", "title": "B", "pairs": [{"zh": "再见", "en": "bye"}]})
+        quiz_path.write_text(json.dumps(data))
+
+        lib.load_article(lib.items["quiz"][0])
+        lib.handle_start()
+        await pilot.pause()
+        practice = app.screen
+        await pilot.press(*"hello")
+        await pilot.pause()
+        assert "quiz data changed on disk; reload" in message_text(practice)
+        assert practice.query_one("#word-input").disabled
+        await pilot.press("escape")
+        await pilot.pause()
+
+        lib.handle_save()
+        assert "changed on disk" in status_text(lib)
+        assert [q["id"] for q in json.loads(quiz_path.read_text())] == ["a", "b"]
+        lib.handle_reload()
+        await pilot.pause()
+        assert [q.article_id for q in lib.items["quiz"]] == ["a", "b"]
 
     run(scenario)
 
@@ -632,13 +668,13 @@ def test_empty_library_rebuild_preserves_new_draft(store_path):
 def test_ctrl_d_deletes_from_list(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Doomed", "Hello world.")
-        lib.selected_article_id = lib.articles[0].article_id
+        lib.selected_article_id = lib.items["article"][0].article_id
         lib.query_one("#article-list").focus()
         await pilot.pause()
         await pilot.press("ctrl+d")  # arm
         await pilot.press("ctrl+d")  # confirm
         await pilot.pause()
-        assert lib.articles == []
+        assert lib.items["article"] == []
 
     run(scenario)
 
@@ -646,7 +682,7 @@ def test_ctrl_d_deletes_from_list(store_path):
 def test_ctrl_r_starts_practice(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Drill", "Hello world.")
-        lib.selected_article_id = lib.articles[0].article_id
+        lib.selected_article_id = lib.items["article"][0].article_id
         await pilot.press("ctrl+r")
         await pilot.pause()
         assert isinstance(app.screen, PracticeScreen)
@@ -671,7 +707,7 @@ def test_ctrl_t_toggles_mode_filter(store_path):
 def test_arming_delete_marks_the_row(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Doomed", "Hello world.")
-        lib.selected_article_id = lib.articles[0].article_id
+        lib.selected_article_id = lib.items["article"][0].article_id
         lib.handle_delete()  # arm
         await pilot.pause()
         item = next(
@@ -699,7 +735,7 @@ def test_start_requires_selection(store_path):
 
 async def start_practice(pilot, app, body, title="Drill"):
     lib = await make_article(pilot, app, title, body)
-    lib.selected_article_id = lib.articles[0].article_id
+    lib.selected_article_id = lib.items["article"][0].article_id
     lib.handle_start()
     await pilot.pause()
     practice = app.screen
@@ -749,7 +785,7 @@ def test_completing_article_awards_star_and_returns_on_any_key(store_path):
         await pilot.pause()
         assert isinstance(app.screen, LibraryScreen)
         # star refresh propagated back to the library view
-        assert lib.articles[0].completed_count == 1
+        assert lib.items["article"][0].completed_count == 1
 
     run(scenario)
 
@@ -825,7 +861,7 @@ def test_leaving_practice_keeps_library_list_intact(store_path, monkeypatch):
         assert app.screen is lib
         assert not rebuilds
         assert list(list_view.children) == rows
-        assert lib.articles[0].practice_word == 1
+        assert lib.items["article"][0].practice_word == 1
 
     run(scenario)
 
@@ -851,15 +887,15 @@ def test_completed_practice_clears_saved_progress(store_path):
 def test_fourth_completion_shows_total_in_library(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Drill", "Hi.")
-        for _ in range(3):
-            lib.store.complete_article(lib.articles[0].article_id)
+        lib.items["article"][0].completed_count = 3
+        lib.stores["article"].save_articles(lib.items["article"])
         lib.refresh_articles_from_store()
         await pilot.pause()
         lib.handle_start()
         await pilot.pause()
         await pilot.press("H", "i")
         await pilot.pause()
-        assert lib.store.load_articles()[0].completed_count == 4
+        assert lib.stores["article"].load_articles()[0].completed_count == 4
         await pilot.press("x")
         await pilot.pause()
         item = next(item for item in lib.query(ArticleItem))
@@ -910,7 +946,8 @@ def test_preview_sentence_breaks_and_completion(store_path):
     async def scenario(app, pilot):
         original = "First sentence. Second sentence!"
         lib = await make_article(pilot, app, "One", original)
-        lib.store.complete_article(lib.articles[0].article_id)
+        lib.items["article"][0].completed_count = 1
+        lib.stores["article"].save_articles(lib.items["article"])
         lib.refresh_articles_from_store()
         await pilot.pause()
         assert str(lib.query_one("#editor-completion").renderable) == "●○○"
@@ -920,7 +957,7 @@ def test_preview_sentence_breaks_and_completion(store_path):
         lib.query_one("#editor-title").value = "Renamed"
         lib.handle_save()
         await pilot.pause()
-        assert lib.store.load_articles()[0].body == original
+        assert lib.stores["article"].load_articles()[0].body == original
         lib.start_new_item("article")
         await pilot.pause()
         assert str(lib.query_one("#editor-completion").renderable) == ""
