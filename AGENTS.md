@@ -41,3 +41,8 @@ This project is a small terminal spelling trainer for personal use. Keep it simp
 - Run `pytest -q` after behavior changes.
 - Run `PYTHONPATH=src python3 -m compileall -q src tests` after Python edits.
 - For Textual UI changes, add or run a small `run_test` smoke when practical, especially for navigation, completion, or dynamic labels.
+
+## Study Content
+
+- `study/` holds the maintainer's English study material built on Wordflow: rules and a ready prompt (`study/STUDY_GUIDE.md`), the generator `study/add_units.py`, and generated companion content in `study/content/`.
+- Only original content goes in the repo. New Concept original texts and practice progress stay in `~/.wordflow/articles.json` and must not be committed.
