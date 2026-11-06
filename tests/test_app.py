@@ -532,16 +532,30 @@ def test_quiz_input_practice_resume_and_completion(store_path):
         for key in "there":
             await pilot.press(key)
         await pilot.pause()
+        assert app.screen.query_one("#sentence-0").display
+        assert message_text(app.screen) == "Enter  next"
+        await pilot.press("ctrl+g", "enter")
+        await pilot.pause()
+        assert app.screen.query_one("#sentence-1").display
         assert str(app.screen.query_one("#sentence-1").renderable) == "我赢了"
         for key in "iwin":
             await pilot.press(key)
+        await pilot.pause()
+        assert not app.screen.is_complete
+        assert message_text(app.screen) == "Enter  next"
+        await pilot.press("enter")
         await pilot.pause()
         assert app.screen.is_complete
         data = json.loads(store_path.with_name("quizzes.json").read_text())
         assert data[0]["completed_count"] == 1
         assert data[0]["practice_index"] == 0
+        assert message_text(app.screen) == "Good  Enter back"
         await pilot.press("x")
         await pilot.pause()
+        assert app.screen.is_complete
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen is lib
         assert lib.items["quiz"][0].completed_count == 1
 
     run(scenario)
@@ -751,7 +765,7 @@ def test_typing_correct_word_advances(store_path):
         await pilot.press("H", "i")
         await pilot.pause()
         assert practice.word_index == 1
-        assert message_text(practice) == "[step] word complete"
+        assert message_text(practice) == ""
 
     run(scenario)
 
@@ -831,9 +845,13 @@ def test_resume_or_restart_incomplete_practice(store_path):
         assert prompt.display
         assert "Enter  Continue" in str(prompt.renderable)
         assert "r  Start over" in str(prompt.renderable)
+        # No input box while the prompt waits, so it can't be mistaken for one.
+        assert practice.query_one("#word-input").region.height == 0
         await pilot.press("enter")
         await pilot.pause()
         assert not prompt.display
+        assert practice.query_one("#word-input").region.height == 1
+        assert app.focused is practice.query_one("#word-input")
         assert practice.word_index == 1
         assert practice.query_one("#word-input").value == "Hi "
         await pilot.press("escape")
@@ -1041,5 +1059,15 @@ def test_moving_highlight_rewrites_only_changed_rows(store_path, monkeypatch):
         await pilot.pause()
         # Only the old and new selection change; "C" must not be rewritten.
         assert sorted(updates) == ["A", "B"]
+
+    run(scenario)
+
+
+def test_bracket_status_text_is_shown_literally(store_path):
+    # Status/messages like "[saved]" must not be parsed as Rich markup,
+    # which silently drops them from the screen.
+    async def scenario(app, pilot):
+        lib = await make_article(pilot, app, "Greeting", "Hello world.")
+        assert "[saved]" in app.export_screenshot()
 
     run(scenario)

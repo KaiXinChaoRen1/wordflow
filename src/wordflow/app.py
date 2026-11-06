@@ -29,7 +29,7 @@ from .storage import DEFAULT_GROUP, Article, ArticleStore, ContentMode, Quiz, Qu
 def completion_marks(article: Article) -> Text:
     lit = min(3, article.completed_count)
     return Text.assemble(
-        ("●" * lit, "#a4884a"),
+        "●" * lit,
         ("○" * (3 - lit), "dim"),
         (f" *{article.completed_count}" if article.completed_count > 3 else "", "dim"),
     )
@@ -85,31 +85,21 @@ class ImportArticlesScreen(Screen[None]):
 
     BINDINGS = [("escape", "app.pop_screen", "Back")]
     CSS = """
-    Screen {
-        background: #111111;
-    }
-
     #settings-detail-root {
         padding: 0 1;
         height: 1fr;
     }
 
     .settings-title {
-        color: #c8ced3;
         text-style: bold;
-        margin-bottom: 0;
     }
 
     .settings-copy {
-        color: #8d949a;
-        margin-bottom: 0;
+        text-style: dim;
     }
 
     .settings-path {
-        color: #d9e1e7;
-        background: #121416;
         padding: 1;
-        margin: 1 0;
     }
     """
 
@@ -141,6 +131,7 @@ class PracticeScreen(Screen[None]):
     """Practice a single article sentence by sentence."""
 
     BINDINGS = [("escape", "app.pop_screen", "Back")]
+    COMPLETE_MESSAGE = "Good  r repeat · any key back"
 
     def __init__(
         self,
@@ -166,6 +157,7 @@ class PracticeScreen(Screen[None]):
         self.current_prefix = ""
         self.active_sentence_index: Optional[int] = None
         self.is_complete = False
+        self.waiting_for_enter = False
         self.choosing_resume = bool(article.practice_sentence or article.practice_word)
 
     def compose(self) -> ComposeResult:
@@ -242,7 +234,9 @@ class PracticeScreen(Screen[None]):
         if text == self.message:
             return
         self.message = text
-        self.query_one("#practice-message", Static).update(text)
+        # Text, not str: a str would be parsed as Rich markup and "[hint]"-style
+        # tags would vanish from the screen.
+        self.query_one("#practice-message", Static).update(Text(text) if isinstance(text, str) else text)
 
     def refresh_article_view(self) -> None:
         previous_index = self.active_sentence_index
@@ -278,13 +272,15 @@ class PracticeScreen(Screen[None]):
                 continue
             end = start + len(word)
             search_from = end
+            # Typed letters fade (dim); the letters still to type are bold
+            # and underlined. No colors, so it reads right in any terminal theme.
             if index < self.word_index:
-                text.stylize("bold #2f6a3d", start, end)
+                text.stylize("dim", start, end)
             elif index == self.word_index:
                 prefix_length = min(len(self.current_prefix), len(word))
                 if prefix_length:
-                    text.stylize("bold #2f6a3d", start, start + prefix_length)
-                text.stylize("bold #b87a20", start + prefix_length, end)
+                    text.stylize("dim", start, start + prefix_length)
+                text.stylize("bold underline", start + prefix_length, end)
 
         return text
 
@@ -305,7 +301,10 @@ class PracticeScreen(Screen[None]):
 
     @on(Input.Changed, "#word-input")
     def handle_input_changed(self, event: Input.Changed) -> None:
-        if self.is_complete or not self.current_words:
+        if self.is_complete:
+            return
+        if self.word_index >= len(self.current_words):
+            self.sync_input_value()
             return
 
         input_widget = self.query_one("#word-input", Input)
@@ -345,20 +344,33 @@ class PracticeScreen(Screen[None]):
         self.current_prefix = ""
 
         if self.word_index >= len(self.current_words):
-            self.sentence_index += 1
-            self.word_index = 0
-            self.refresh_sentence()
-            if not self.is_complete:
-                self.save_progress()
+            self.sentence_typed()
             return
 
         self.refresh_article_view()
         self.sync_input_value()
         input_widget.cursor_position = len(input_widget.value)
-        self.set_message("[step] word complete")
+        self.set_message("")  # the highlight moving on is feedback enough
         self.save_progress()
 
+    def sentence_typed(self) -> None:
+        """Called when the last word of the current sentence is typed."""
+        self.next_sentence()
+
+    def next_sentence(self) -> None:
+        self.sentence_index += 1
+        self.word_index = 0
+        self.refresh_sentence()
+        if not self.is_complete:
+            self.save_progress()
+
     def on_key(self, event) -> None:
+        if self.waiting_for_enter:
+            if event.key == "enter":
+                event.stop()
+                self.waiting_for_enter = False
+                self.next_sentence()
+            return
         if self.choosing_resume:
             if event.key not in ("enter", "r"):
                 return
@@ -381,7 +393,10 @@ class PracticeScreen(Screen[None]):
         if not self.is_complete:
             return
         event.stop()
-        if event.key == "r":
+        self.handle_complete_key(event.key)
+
+    def handle_complete_key(self, key: str) -> None:
+        if key == "r":
             self.restart_practice()
         else:
             self.app.pop_screen()
@@ -428,7 +443,7 @@ class PracticeScreen(Screen[None]):
             input_widget.value = ""
         input_widget.disabled = True
         self.refresh_progress()
-        self.set_message("[bold #6fbf73]Good[/bold #6fbf73]  r repeat · any key back")
+        self.set_message(self.COMPLETE_MESSAGE)
 
         self.article.completed_count += 1
         self.article.practice_sentence = 0
@@ -439,6 +454,14 @@ class PracticeScreen(Screen[None]):
 
 class QuizPracticeScreen(PracticeScreen):
     BINDINGS = [("escape", "app.pop_screen", "Back"), ("ctrl+g", "hint", "Hint")]
+
+    # Quiz answers end with Enter, so a stray key after the last answer must
+    # not leave the screen: only Enter goes back.
+    COMPLETE_MESSAGE = "Good  Enter back"
+
+    def handle_complete_key(self, key: str) -> None:
+        if key == "enter":
+            self.app.pop_screen()
 
     def on_mount(self) -> None:
         for index in range(len(self.article.sentences)):
@@ -467,10 +490,17 @@ class QuizPracticeScreen(PracticeScreen):
         for index in range(len(self.article.sentences)):
             widget = self.query_one(f"#{self.sentence_widget_id(index)}", Static)
             widget.display = index == self.sentence_index
+            widget.set_class(index == self.sentence_index, "article-sentence--active")
         self.active_sentence_index = self.sentence_index
 
+    def sentence_typed(self) -> None:
+        # Pause on the finished answer; on_key moves on when Enter is pressed.
+        self.waiting_for_enter = True
+        self.sync_input_value()
+        self.set_message("Enter  next")
+
     def action_hint(self) -> None:
-        if not self.is_complete and not self.choosing_resume and self.current_words:
+        if not self.is_complete and not self.choosing_resume and self.word_index < len(self.current_words):
             target = self.current_words[self.word_index]
             self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
 
@@ -490,102 +520,32 @@ class LibraryScreen(Screen[None]):
     ]
 
     CSS = """
-    Screen {
-        layout: vertical;
-        background: #101113;
-        color: #c9cdd1;
-    }
-
     #library-root {
         height: 1fr;
         padding: 0 1;
         align-horizontal: center;
     }
 
-    #library-sidebar {
+    #library-sidebar, #editor-card {
         width: 1fr;
         max-width: 100;
     }
 
     #sidebar-card, #editor-card {
         height: 1fr;
-        border: none;
-        background: transparent;
         padding: 1;
-    }
-
-    #article-list {
-        height: 1fr;
-        border: none;
-        background: #111316;
-        color: #aeb4b9;
-        scrollbar-size-vertical: 1;
-        overflow-x: auto;
-        scrollbar-size-horizontal: 1;
-    }
-
-    #filter-switch {
-        height: 1;
-        margin-bottom: 1;
-        background: transparent;
-    }
-
-    #filter-label {
-        width: 6;
-        height: 1;
-        color: #5f666c;
-    }
-
-    .filter-button {
-        width: 12;
-        height: 1;
-        min-height: 1;
-        background: transparent;
-        color: #767d83;
-        margin-right: 0;
-        padding: 0;
-        text-style: none;
-    }
-
-    .filter-button.-active {
-        background: transparent;
-        color: #d4d9dd;
-        text-style: bold;
-    }
-
-    .filter-button:hover {
-        background: transparent;
-        color: #c0c6cb;
-    }
-
-    .filter-button:focus {
-        background: transparent;
-        color: #cfd4d8;
-        outline: none;
     }
 
     #editor-card {
         display: none;
-        width: 1fr;
-        max-width: 100;
-        padding: 1;
     }
 
-    #editor-heading {
-        height: 2;
-    }
-
-    #split-options {
+    #filter-switch, #split-options {
         height: 1;
         margin-bottom: 1;
     }
 
-    #split-label {
-        width: 8;
-        color: #767d83;
-    }
-
-    .split-button {
+    .filter-button, .split-button, #split-label {
         width: 12;
         min-width: 0;
         height: 1;
@@ -593,12 +553,52 @@ class LibraryScreen(Screen[None]):
         border: none;
         padding: 0;
         background: transparent;
-        color: #767d83;
+        text-style: dim;
     }
 
-    .split-button.is-active {
-        color: #d4d9dd;
+    #split-label {
+        width: 8;
+    }
+
+    .filter-button.-active, .split-button.is-active {
         text-style: bold;
+    }
+
+    #article-list {
+        height: 1fr;
+        background: transparent;
+        scrollbar-size-vertical: 1;
+        overflow-x: auto;
+        scrollbar-size-horizontal: 1;
+    }
+
+    #article-list > ListItem {
+        width: auto;
+        min-width: 100%;
+        height: 1;
+        padding: 0 1;
+    }
+
+    /* One owner for row state: the row's own text (marker + bold), never a
+       background. ListView's hover/highlight backgrounds are switched off. */
+    #article-list > ListItem,
+    #article-list > ListItem.-hovered,
+    #article-list > ListItem.-highlight,
+    #article-list:focus > ListItem.-highlight {
+        background: transparent;
+    }
+
+    #article-list > ListItem Label {
+        width: auto;
+        background: transparent;
+    }
+
+    #article-list > ListItem.is-selected Label {
+        text-style: bold;
+    }
+
+    #editor-heading {
+        height: 2;
     }
 
     #editor-completion {
@@ -607,48 +607,46 @@ class LibraryScreen(Screen[None]):
         margin-left: 1;
     }
 
-    #editor-title {
+    /* Editor fields have no box; a left bar marks which one has focus. */
+    #editor-title, #editor-group {
         width: 1fr;
         height: 1;
         min-height: 1;
         padding: 0 1;
-        border: none;
-        background: #111316;
-        color: #c9cdd1;
         margin-bottom: 1;
     }
 
-    #editor-group {
-        width: 1fr;
-        height: 1;
-        min-height: 1;
-        padding: 0 1;
+    #editor-title, #editor-group, #article-body {
         border: none;
-        background: #111316;
-        color: #9fa6ac;
-        margin-bottom: 1;
+        border-left: blank;
+        background: transparent;
+    }
+
+    #editor-title:focus, #editor-group:focus, #article-body:focus {
+        border: none;
+        border-left: outer ansi_bright_black;
+        background-tint: transparent;
     }
 
     #article-body {
         height: 1fr;
-        margin: 0;
-        border: none;
-        background: #111316;
-        color: #c9cdd1;
+    }
+
+    #article-body .text-area--cursor-line,
+    #article-body .text-area--cursor-gutter {
+        background: transparent;
     }
 
     #status {
         height: 1;
         padding: 0 2;
-        color: #6a7177;
+        text-style: dim;
     }
 
     #action-row {
         dock: bottom;
-        layout: horizontal;
         height: 1;
         padding: 0 1;
-        background: #101113;
     }
 
     .action-button {
@@ -658,68 +656,14 @@ class LibraryScreen(Screen[None]):
         min-height: 1;
         border: none;
         background: transparent;
-        color: #848b91;
         margin-right: 1;
         padding: 0 1;
+        text-style: dim;
     }
 
-    .action-button:hover {
-        color: #adb3b8;
-    }
-
-    .action-button:focus {
-        color: #cfd4d8;
-        text-style: bold;
-    }
-
-    #article-list > ListItem {
-        width: auto;
-        min-width: 100%;
-        height: 1;
-        padding: 0 1;
+    .action-button:hover, .action-button:focus {
         background: transparent;
-    }
-
-    #article-list > ListItem Label {
-        width: auto;
-        background: transparent;
-        color: #aeb4b9;
-    }
-
-    #article-list > ListItem.group-header Label {
-        color: #697178;
         text-style: bold;
-    }
-
-    #article-list > ListItem.-hovered,
-    #article-list > ListItem.-highlight,
-    #article-list:focus > ListItem.-highlight,
-    #article-list > ListItem.is-selected,
-    #article-list:focus > ListItem.is-selected {
-        background: transparent;
-    }
-
-    #article-list > ListItem.is-selected,
-    #article-list > ListItem.is-selected Label {
-        color: #ebeef0;
-        text-style: bold;
-    }
-
-    Footer {
-        dock: bottom;
-        background: #101113;
-        color: #6a7177;
-    }
-
-    Input, TextArea {
-        scrollbar-background: #111316;
-        scrollbar-color: #30363b;
-        scrollbar-color-hover: #3b4248;
-        scrollbar-size-vertical: 1;
-    }
-
-    Label {
-        color: #aeb4b9;
     }
     """
 
@@ -950,7 +894,8 @@ class LibraryScreen(Screen[None]):
         self.query_one("#editor-title", Input).focus()
 
     def set_status(self, text: str) -> None:
-        self.query_one("#status", Static).update(text)
+        # Text, not str: a str is parsed as Rich markup and "[saved]" vanishes.
+        self.query_one("#status", Static).update(Text(text))
 
     def mark_editor_saved(self, title: str, group: str, body: str) -> None:
         self.loaded_title = title
@@ -1358,15 +1303,28 @@ class WordflowApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
 
     CSS = """
-    Footer {
-        dock: bottom;
-        background: #101113;
-        color: #6a7177;
+    /* textual-ansi theme: every surface uses the terminal's own background
+       and foreground, so the app looks like plain command output. Hierarchy
+       comes only from bold / dim, which every terminal theme renders. */
+    Screen {
+        background: ansi_default;
+        color: ansi_default;
     }
 
-    Screen {
-        background: #101113;
-        color: #c9cdd1;
+    Input, TextArea {
+        scrollbar-size-vertical: 1;
+    }
+
+    Input > .input--placeholder {
+        text-style: dim;
+    }
+
+    Footer, Footer FooterKey, Footer FooterKey:hover,
+    Footer FooterKey > .footer-key--key,
+    Footer FooterKey > .footer-key--description {
+        background: transparent;
+        color: ansi_default;
+        text-style: dim;
     }
 
     #practice-root {
@@ -1375,61 +1333,58 @@ class WordflowApp(App[None]):
     }
 
     #practice-title {
-        color: #cfd4d8;
         text-style: bold;
-        margin-bottom: 0;
     }
 
     #resume-prompt {
         height: 2;
         margin: 1 0;
-        color: #cfd4d8;
         text-style: bold;
     }
 
     #practice-progress {
         height: 1;
-        color: #5f666c;
-        margin-bottom: 0;
+        text-style: dim;
+    }
+
+    #practice-message {
+        height: 1;
     }
 
     #article-view {
         height: 1fr;
-        margin: 0;
-        border: none;
-        background: #111316;
-        scrollbar-background: #111316;
-        scrollbar-color: #24282c;
-        scrollbar-color-hover: #30363b;
+        background: transparent;
         scrollbar-size-vertical: 1;
     }
 
     .article-sentence {
         padding: 0 1;
-        margin: 0;
-        color: #7c8389;
-        background: #111316;
+        text-style: dim;
     }
 
     .article-sentence--active {
-        color: #ccd1d6;
-        background: #171a1d;
-        text-style: bold;
-    }
-
-    #practice-message {
-        height: 1;
-        margin: 0;
-        color: #666d73;
+        text-style: none;
     }
 
     #word-input {
+        height: 1;
         border: none;
-        background: #111316;
-        color: #c7ccd1;
+        background: transparent;
         dock: bottom;
+    }
+
+    #word-input:focus {
+        background-tint: transparent;
+    }
+
+    /* Disabled = waiting on the resume prompt, finished, or a save error.
+       Hide it so it never looks like a box you can type into. (Textual's
+       faded disabled style also paints a black block in ANSI mode.) */
+    #word-input:disabled {
+        display: none;
     }
     """
 
     def on_mount(self) -> None:
+        self.theme = "textual-ansi"
         self.push_screen(LibraryScreen(ArticleStore()))
