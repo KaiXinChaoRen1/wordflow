@@ -45,4 +45,5 @@ This project is a small terminal spelling trainer for personal use. Keep it simp
 ## Study Content
 
 - `study/` holds the maintainer's English study material built on Wordflow: rules and a ready prompt (`study/STUDY_GUIDE.md`), the generator `study/add_units.py`, and generated companion content in `study/content/`.
-- Only original content goes in the repo. New Concept original texts and practice progress stay in `~/.wordflow/articles.json` and must not be committed.
+- Only original content goes in the repo. New Concept original texts stay in `~/.wordflow/` and must not be committed.
+- `data/` is a backup of `~/.wordflow/` (including practice progress) without New Concept originals. Refresh it with `python3 data/backup.py`; never copy the JSON files there by hand.
