@@ -24,9 +24,8 @@
 - 母语是中文的成年人，在终端里的打字练习工具 Wordflow 上练英语拼写和句型。
 - 主线教材是 NCE2 原文（96 课，已全部录入）。每两课配一个"单元"，学习顺序：
   1. **原文**：Copy 页 `New Concept 2`，打原文两课
-  2. **现代版**：Copy 页 `New Concept 2 · Modern`，打同语法水平、内容更现代的新编文章
-  3. **抄写预习**：Copy 页 `New Concept 2 · Quiz Prep`，中英对照抄写本单元的 quiz 句子
-  4. **默写**：Quiz 页 `New Concept 2 · Modern`，看中文默写英文
+  2. **现代版及抄写预习**：Copy 页 `New Concept 2 · Modern`，先打现代版文章，再中英对照抄写 quiz 句子
+  3. **默写**：Quiz 页 `New Concept 2 · Modern`，看中文默写英文
 - 最重要的原则：**不能让我学到错误的英文**。宁可保守，也不要写不地道或有语法问题的句子。
 
 ## Wordflow 的练习机制（决定了下面的格式规则）
@@ -48,7 +47,7 @@
 | `article` | 现代版文章，一行一句，段落之间空一行 |
 | `quiz` | 6–9 个 `[中文, 英文]` 句对 |
 
-文件格式见范例 `study/content/nce2-01-10.json`。脚本会用 `Lessons N–M · <title>` 作为三处内容共同的标题，
+文件格式见范例 `study/content/nce2-01-10.json`。脚本会用 `Lessons N–M · <title>` 作为两处内容共同的标题，
 并自动生成抄写预习条目，不需要手写。
 
 ## 现代版文章的写作规则
@@ -103,7 +102,7 @@
 5. 运行 `python3 ~/workspace/spelllane/study/add_units.py <文件> --write`。脚本会先把两个数据文件备份到 `~/.wordflow/backup/`，再写入并重新加载校验。
 6. 更新本文件末尾的"进度记录"。
 
-要重新生成某个单元，先在 app 里删掉它的三处内容（Modern 文章、Quiz Prep 条目、Quiz），再重新写入。
+要重新生成某个单元，先在 app 里删掉它的两处内容（Modern 文章和 Quiz），再重新写入。
 想先演练的话，把数据复制到别处，然后设 `WORDFLOW_STUDY_DATA=<目录>` 再运行脚本。
 
 ## 自查清单

@@ -11,15 +11,33 @@ def test_failed_save_preserves_existing_file(tmp_path, monkeypatch):
     store.upsert_article([], title="Original", body="Original body.")
     original = path.read_text(encoding="utf-8")
 
-    def fail_dump(*args, **kwargs):
-        args[1].write("partial")
+    def fail_replace(*args, **kwargs):
         raise OSError("disk error")
 
-    monkeypatch.setattr("wordflow.storage.json.dump", fail_dump)
+    monkeypatch.setattr("wordflow.storage.os.replace", fail_replace)
     with pytest.raises(OSError, match="disk error"):
         store.save_articles([])
     assert path.read_text(encoding="utf-8") == original
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_external_edit_just_after_replace_is_not_adopted(tmp_path, monkeypatch):
+    path = tmp_path / "articles.json"
+    store = ArticleStore(path)
+    items = store.upsert_article([], title="Original", body="Hello.")
+    external = b'[{"article_id":"external","body":"Bye."}]'
+    from wordflow.storage import os
+    replace = os.replace
+
+    def replace_then_edit(source, target):
+        replace(source, target)
+        path.write_bytes(external)
+
+    monkeypatch.setattr("wordflow.storage.os.replace", replace_then_edit)
+    store.save_articles(items)
+    with pytest.raises(ValueError, match="changed on disk"):
+        store.save_articles(items)
+    assert path.read_bytes() == external
 
 
 def test_quiz_file_errors_identify_item_and_pair(tmp_path):

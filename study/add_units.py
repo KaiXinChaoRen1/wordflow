@@ -1,10 +1,9 @@
 """Add New Concept 2 companion units (modern article + quiz prep + quiz) to Wordflow data.
 
 One unit = two original lessons. For each unit this writes:
-  - Copy tab, group "New Concept 2 · Modern":    the modern article (sentence split)
-  - Copy tab, group "New Concept 2 · Quiz Prep": the quiz pairs as zh/en lines (line split)
+  - Copy tab, group "New Concept 2 · Modern":    the article followed by quiz pairs
   - Quiz tab, group "New Concept 2 · Modern":    the quiz pairs
-All three share the title "Lessons N–M · <title>".
+Both share the title "Lessons N–M · <title>".
 
 Usage:
   python3 study/add_units.py <content.json>           # check only, writes nothing
@@ -32,7 +31,6 @@ from wordflow.storage import ArticleStore, QuizStore  # noqa: E402
 
 ORIGINAL_GROUP = "New Concept 2"
 MODERN_GROUP = "New Concept 2 · Modern"
-PREP_GROUP = "New Concept 2 · Quiz Prep"
 CJK = re.compile(r"[㐀-鿿]")
 CONTRACTION = re.compile(r"[A-Za-z](n't|'m|'re|'ve|'ll|'d)\b|\b(it|that|there|what|he|she|who|let)'s\b", re.IGNORECASE)
 
@@ -128,10 +126,10 @@ def main() -> None:
 
     for unit_id, full_title, unit in plans:
         pairs_body = "\n".join(f"{zh.strip()}\n{en.strip()}" for zh, en in unit["quiz"])
-        article_items = articles.upsert_article(article_items, full_title, unit["article"], "article",
+        prep = "\n\n".join(f"{zh.strip()} {en.strip()}" for zh, en in unit["quiz"])
+        body = f"{unit['article'].strip()}\n\n{prep}"
+        article_items = articles.upsert_article(article_items, full_title, body, "article",
                                                 MODERN_GROUP, f"{unit_id}-modern")
-        article_items = articles.upsert_article(article_items, full_title, pairs_body, "note",
-                                                PREP_GROUP, f"{unit_id}-prep")
         quiz_items = quizzes.upsert_article(quiz_items, full_title, pairs_body, "quiz", MODERN_GROUP, unit_id)
 
     # Reload proves both files are still valid for the app.

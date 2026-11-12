@@ -185,17 +185,20 @@ class ArticleStore:
         if current != self.snapshot:
             raise ValueError(f"{self.kind} data changed on disk; reload: {self.path}")
         payload = [self.to_record(article) for article in articles]
+        data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         # Write to a temp file and rename, so a crash mid-write never leaves
         # a truncated data file behind.
         temporary_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=self.path.parent, delete=False
+                mode="wb", dir=self.path.parent, delete=False
             ) as handle:
                 temporary_path = Path(handle.name)
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.write(data)
             os.replace(temporary_path, self.path)
-            self.snapshot = self.path.read_bytes()
+            # Remember exactly what we wrote. Re-reading here could adopt an
+            # external edit as our baseline and allow the next save to erase it.
+            self.snapshot = data
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)

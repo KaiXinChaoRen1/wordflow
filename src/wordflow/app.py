@@ -8,9 +8,10 @@ from uuid import uuid4
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Click
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
     Footer,
@@ -27,12 +28,12 @@ from .storage import DEFAULT_GROUP, Article, ArticleStore, ContentMode, Quiz, Qu
 
 
 def completion_marks(article: Article) -> Text:
-    lit = min(3, article.completed_count)
-    return Text.assemble(
-        "●" * lit,
-        ("○" * (3 - lit), "dim"),
-        (f" *{article.completed_count}" if article.completed_count > 3 else "", "dim"),
-    )
+    count = article.completed_count
+    # Past the three-dot goal, a single bold star plus the total replaces the
+    # dots so well-practiced rows stand out instead of all reading "●●●".
+    if count > 3:
+        return Text.assemble(("★", "bold"), f" ×{count}")
+    return Text("●" * count)
 
 
 class GroupHeader(ListItem):
@@ -78,6 +79,21 @@ class ArticleItem(ListItem):
             return
         self._shown = shown
         self._label.update(self._label_text(selected, armed))
+
+
+class QuitConfirmScreen(ModalScreen[None]):
+    """Confirm an intentional exit without losing the current screen."""
+
+    BINDINGS = [("y", "confirm", "Quit"), ("n,escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Static("Quit?  y / n  (Ctrl+C to quit)", id="quit-confirm")
+
+    def action_confirm(self) -> None:
+        self.app.exit()
+
+    def action_cancel(self) -> None:
+        self.dismiss()
 
 
 class ImportArticlesScreen(Screen[None]):
@@ -127,6 +143,17 @@ class ImportArticlesScreen(Screen[None]):
         yield Footer()
 
 
+class PracticeInput(Input):
+    """Validate each edit before the next queued key can change the value."""
+
+    def _watch_value(self, value: str) -> None:
+        user_edit = self.is_mounted and not self._is_prevented(Input.Changed)
+        with self.prevent(Input.Changed):
+            super()._watch_value(value)
+        if user_edit:
+            self.screen.handle_input_changed(Input.Changed(self, value))
+
+
 class PracticeScreen(Screen[None]):
     """Practice a single article sentence by sentence."""
 
@@ -173,13 +200,13 @@ class PracticeScreen(Screen[None]):
             with VerticalScroll(id="article-view"):
                 for index, sentence in enumerate(self.article.sentences):
                     yield Static(
-                        self.display_sentence(index),
+                        Text(self.display_sentence(index)),
                         id=self.sentence_widget_id(index),
-                        classes="article-sentence",
+                        classes="article-sentence" + (" bilingual-pair" if self.article.mode == "article" and any("\u3400" <= ch <= "\u9fff" for ch in sentence) and extract_words(sentence) else ""),
                         markup=False,
                     )
             yield Static("", id="practice-message")
-            yield Input(placeholder="type", id="word-input")
+            yield PracticeInput(placeholder="type", id="word-input")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -243,11 +270,17 @@ class PracticeScreen(Screen[None]):
         changed_sentence = previous_index != self.sentence_index
         if changed_sentence and previous_index is not None:
             previous = self.query_one(f"#{self.sentence_widget_id(previous_index)}", Static)
-            previous.update(Text(self.article.sentences[previous_index]))
+            previous.renderable.spans = []
+            previous.refresh()
             previous.remove_class("article-sentence--active")
 
         current_widget = self.query_one(f"#{self.sentence_widget_id(self.sentence_index)}", Static)
-        current_widget.update(self.render_sentence(self.article.sentences[self.sentence_index]))
+        # Only styles change while typing. Static.update requests a layout of
+        # the whole article on every letter, even though its text is unchanged.
+        current_widget.renderable.spans = self.render_sentence(
+            self.article.sentences[self.sentence_index]
+        ).spans
+        current_widget.refresh()
         current_widget.add_class("article-sentence--active")
         self.active_sentence_index = self.sentence_index
         if changed_sentence:
@@ -293,13 +326,11 @@ class PracticeScreen(Screen[None]):
     def sync_input_value(self) -> None:
         input_widget = self.query_one("#word-input", Input)
         value = self.build_input_value()
-        # Programmatic corrections must not re-enter the input event queue.
-        # A single remembered value cannot identify multiple queued changes.
+        # Programmatic corrections must not be validated recursively.
         with input_widget.prevent(Input.Changed):
             input_widget.value = value
         input_widget.cursor_position = len(value)
 
-    @on(Input.Changed, "#word-input")
     def handle_input_changed(self, event: Input.Changed) -> None:
         if self.is_complete:
             return
@@ -411,7 +442,7 @@ class PracticeScreen(Screen[None]):
         outside the app) stop typing and show the reason; Esc goes back."""
         try:
             self.store.save_articles(self.items)
-        except ValueError as error:
+        except (ValueError, OSError) as error:
             self.query_one("#word-input", Input).disabled = True
             self.set_message(Text(f"[invalid] {error}"))
             return False
@@ -434,9 +465,10 @@ class PracticeScreen(Screen[None]):
             return
 
         self.is_complete = True
-        for index, sentence in enumerate(self.article.sentences):
-            widget = self.query_one(f"#{self.sentence_widget_id(index)}", Static)
-            widget.update(self.display_sentence(index))
+        if self.active_sentence_index is not None:
+            widget = self.query_one(f"#{self.sentence_widget_id(self.active_sentence_index)}", Static)
+            widget.renderable.spans = []
+            widget.refresh()
             widget.remove_class("article-sentence--active")
         input_widget = self.query_one("#word-input", Input)
         with input_widget.prevent(Input.Changed):
@@ -445,15 +477,21 @@ class PracticeScreen(Screen[None]):
         self.refresh_progress()
         self.set_message(self.COMPLETE_MESSAGE)
 
+        previous_progress = (self.article.practice_sentence, self.article.practice_word)
         self.article.completed_count += 1
         self.article.practice_sentence = 0
         self.article.practice_word = 0
-        if self.write_items() and self.on_completed is not None:
+        if not self.write_items():
+            self.article.completed_count -= 1
+            self.article.practice_sentence, self.article.practice_word = previous_progress
+            self.is_complete = False
+            return
+        if self.on_completed is not None:
             self.on_completed()
 
 
 class QuizPracticeScreen(PracticeScreen):
-    BINDINGS = [("escape", "app.pop_screen", "Back"), ("ctrl+g", "hint", "Hint")]
+    BINDINGS = [("escape", "app.pop_screen", "Back")]
 
     # Quiz answers end with Enter, so a stray key after the last answer must
     # not leave the screen: only Enter goes back.
@@ -480,17 +518,20 @@ class QuizPracticeScreen(PracticeScreen):
     def refresh_progress(self) -> None:
         current = min(self.sentence_index + 1, len(self.article.sentences))
         self.query_one("#practice-progress", Static).update(
-            Text(f"{current} / {len(self.article.sentences)} · Ctrl+G hint", "dim")
+            Text(f"{current} / {len(self.article.sentences)}", "dim")
         )
 
     def show_wrong_input(self, target: str) -> None:
-        self.set_message("[wrong]")
+        self.set_message(f"[wrong] next -> {target[len(self.current_prefix)]}")
 
     def refresh_article_view(self) -> None:
-        for index in range(len(self.article.sentences)):
-            widget = self.query_one(f"#{self.sentence_widget_id(index)}", Static)
-            widget.display = index == self.sentence_index
-            widget.set_class(index == self.sentence_index, "article-sentence--active")
+        # Only the current prompt is shown, so it keeps the plain dim
+        # .article-sentence style (no --active highlight) like the hint line.
+        if self.active_sentence_index == self.sentence_index:
+            return
+        if self.active_sentence_index is not None:
+            self.query_one(f"#{self.sentence_widget_id(self.active_sentence_index)}", Static).display = False
+        self.query_one(f"#{self.sentence_widget_id(self.sentence_index)}", Static).display = True
         self.active_sentence_index = self.sentence_index
 
     def sentence_typed(self) -> None:
@@ -499,10 +540,6 @@ class QuizPracticeScreen(PracticeScreen):
         self.sync_input_value()
         self.set_message("Enter  next")
 
-    def action_hint(self) -> None:
-        if not self.is_complete and not self.choosing_resume and self.word_index < len(self.current_words):
-            target = self.current_words[self.word_index]
-            self.set_message(f"[hint] next -> {target[len(self.current_prefix)]}")
 
 
 class LibraryScreen(Screen[None]):
@@ -1301,8 +1338,21 @@ class WordflowApp(App[None]):
     TITLE = "Indexer"
     SUB_TITLE = "local records"
     ENABLE_COMMAND_PALETTE = False
+    BINDINGS = [Binding("ctrl+c", "confirm_quit", show=False, priority=True)]
 
     CSS = """
+    QuitConfirmScreen {
+        align: center middle;
+        background: $background 60%;
+    }
+
+    #quit-confirm {
+        width: auto;
+        height: auto;
+        padding: 1 2;
+        background: $surface;
+    }
+
     /* textual-ansi theme: every surface uses the terminal's own background
        and foreground, so the app looks like plain command output. Hierarchy
        comes only from bold / dim, which every terminal theme renders. */
@@ -1362,6 +1412,10 @@ class WordflowApp(App[None]):
         text-style: dim;
     }
 
+    .bilingual-pair {
+        margin-bottom: 1;
+    }
+
     .article-sentence--active {
         text-style: none;
     }
@@ -1384,6 +1438,12 @@ class WordflowApp(App[None]):
         display: none;
     }
     """
+
+    def action_confirm_quit(self) -> None:
+        if isinstance(self.screen, QuitConfirmScreen):
+            self.exit()
+        else:
+            self.push_screen(QuitConfirmScreen())
 
     def on_mount(self) -> None:
         self.theme = "textual-ansi"

@@ -9,6 +9,7 @@ import asyncio
 import json
 
 import pytest
+from textual.events import Key
 
 from wordflow.app import ArticleItem, GroupHeader, LibraryScreen, PracticeScreen, QuizPracticeScreen, WordflowApp
 from wordflow.storage import ArticleStore
@@ -288,7 +289,7 @@ def test_list_labels_treat_user_brackets_as_plain_text(store_path):
         article = next(item for item in rows if isinstance(item, ArticleItem))
 
         assert str(header.children[0].renderable) == "- Book [1] · 1"
-        assert str(article._label.renderable).endswith("One [x]  ○○○")
+        assert str(article._label.renderable).endswith("One [x]  ")
 
     run(scenario)
 
@@ -321,7 +322,7 @@ def test_article_row_shows_title_and_stars_on_one_line(store_path):
 
         label = str(item._label.renderable)
         assert "\n" not in label
-        assert label.endswith("One  ○○○")
+        assert label.endswith("One  ")
 
     run(scenario)
 
@@ -514,11 +515,8 @@ def test_quiz_input_practice_resume_and_completion(store_path):
         assert not practice.query_one("#sentence-1").display
         await pilot.press("x")
         await pilot.pause()
-        assert message_text(practice) == "[wrong]"
+        assert message_text(practice) == "[wrong] next -> H"
         assert practice.query_one("#word-input").value == ""
-        await pilot.press("ctrl+g")
-        await pilot.pause()
-        assert message_text(practice) == "[hint] next -> H"
         await pilot.press("h", "i")
         await pilot.pause()
         assert practice.query_one("#word-input").value == "Hi "
@@ -917,8 +915,8 @@ def test_fourth_completion_shows_total_in_library(store_path):
         await pilot.press("x")
         await pilot.pause()
         item = next(item for item in lib.query(ArticleItem))
-        assert str(item._label.renderable).endswith("●●● *4")
-        assert str(lib.query_one("#editor-completion").renderable) == "●●● *4"
+        assert str(item._label.renderable).endswith("★ ×4")
+        assert str(lib.query_one("#editor-completion").renderable) == "★ ×4"
 
     run(scenario)
 
@@ -968,7 +966,7 @@ def test_preview_sentence_breaks_and_completion(store_path):
         lib.stores["article"].save_articles(lib.items["article"])
         lib.refresh_articles_from_store()
         await pilot.pause()
-        assert str(lib.query_one("#editor-completion").renderable) == "●○○"
+        assert str(lib.query_one("#editor-completion").renderable) == "●"
         assert lib.query_one("#article-body").text == "First sentence.\nSecond sentence!"
         assert lib.query_one("#article-body").soft_wrap
         assert not lib.editor_is_dirty()
@@ -1069,5 +1067,104 @@ def test_bracket_status_text_is_shown_literally(store_path):
     async def scenario(app, pilot):
         lib = await make_article(pilot, app, "Greeting", "Hello world.")
         assert "[saved]" in app.export_screenshot()
+
+    run(scenario)
+
+
+def test_quit_confirmation_can_cancel_and_confirm(store_path):
+    async def scenario(app, pilot):
+        original = app.screen
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        assert "Quit?" in str(app.screen.query_one("#quit-confirm").renderable)
+        await pilot.press("n")
+        await pilot.pause()
+        assert app.screen is original
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        assert not app.is_running
+
+    run(scenario)
+
+
+@pytest.mark.parametrize("disk_error", [False, True])
+def test_failed_completion_stays_failed_without_awarding_star(store_path, monkeypatch, disk_error):
+    async def scenario(app, pilot):
+        lib, practice = await start_practice(pilot, app, "Hi.")
+        original = store_path.read_bytes()
+        if disk_error:
+            def fail_save(items):
+                raise OSError("disk full")
+            monkeypatch.setattr(practice.store, "save_articles", fail_save)
+        else:
+            store_path.write_bytes(original + b"\n")
+        await pilot.press("h", "i")
+        await pilot.pause()
+        assert not practice.is_complete
+        assert lib.items["article"][0].completed_count == 0
+        assert practice.query_one("#word-input").disabled
+        assert "disk full" in message_text(practice) if disk_error else "changed on disk" in message_text(practice)
+        await pilot.press("x", "r")
+        await pilot.pause()
+        assert app.screen is practice
+        assert not practice.is_complete
+        assert json.loads(store_path.read_bytes())[0]["completed_count"] == 0
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is lib
+
+    run(scenario)
+
+
+def test_sentence_highlight_tracks_typing_and_clears_on_completion(store_path):
+    async def scenario(app, pilot):
+        _, practice = await start_practice(pilot, app, "Hello world. Bye.")
+        first = practice.query_one("#sentence-0")
+        await pilot.press("h")
+        await pilot.pause()
+        assert str(first.renderable) == "Hello world."
+        assert any(span.start == 1 and span.end == 5 and span.style == "bold underline"
+                   for span in first.renderable.spans)
+        await pilot.press(*"elloworld")
+        await pilot.pause()
+        assert not first.renderable.spans
+        assert not first.has_class("article-sentence--active")
+        second = practice.query_one("#sentence-1")
+        assert second.has_class("article-sentence--active")
+        await pilot.press(*"bye")
+        await pilot.pause()
+        assert practice.is_complete
+        assert not second.renderable.spans
+        await pilot.press("r")
+        await pilot.pause()
+        assert first.has_class("article-sentence--active")
+        assert not second.has_class("article-sentence--active")
+
+    run(scenario)
+
+
+@pytest.mark.parametrize("mode", ["article", "quiz"])
+def test_queued_typing_keeps_up_across_word_boundaries(store_path, mode):
+    async def scenario(app, pilot):
+        body = "Hello world this is practice."
+        lib = await make_article(pilot, app, "Burst", "你好\n" + body if mode == "quiz" else body, mode=mode)
+        lib.handle_start()
+        await pilot.pause()
+        practice = app.screen
+        input_widget = practice.query_one("#word-input")
+        # Queue a burst without pausing between keys, as when the UI briefly
+        # falls behind. A queued Changed event used to contain stale prefixes.
+        for char in "helloworldthisispractice":
+            input_widget.post_message(Key(char, char))
+        await pilot.pause()
+        if mode == "quiz":
+            assert practice.waiting_for_enter
+            await pilot.press("enter")
+            await pilot.pause()
+        assert practice.is_complete
+        assert "Good" in message_text(practice)
+        assert lib.stores[mode].load_articles()[0].completed_count == 1
 
     run(scenario)
